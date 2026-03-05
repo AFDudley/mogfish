@@ -282,6 +282,29 @@ pub fn compile_to_binary(source: &str, options: &CompileOptions) -> Result<PathB
                 "cc (compile extra C file)",
             )?;
             link.arg(&c_obj);
+        } else if extra.extension().is_some_and(|e| e == "rs") {
+            // Compile .rs to static library, then force-load to preserve constructors
+            let rs_lib = tmp_ref.join(
+                extra
+                    .file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string()
+                    + ".a",
+            );
+            run_command(
+                Command::new("rustc")
+                    .arg("--edition")
+                    .arg("2024")
+                    .arg("--crate-type")
+                    .arg("staticlib")
+                    .arg("-o")
+                    .arg(&rs_lib)
+                    .arg(extra),
+                "rustc (compile extra Rust file)",
+            )?;
+            // Use -force_load to ensure constructors (__mod_init_func) are linked
+            link.arg("-Wl,-force_load").arg(&rs_lib);
         } else {
             link.arg(extra);
         }
@@ -368,6 +391,54 @@ pub fn compile_plugin(source: &str, name: &str, version: &str) -> Result<PathBuf
     #[cfg(target_os = "macos")]
     {
         link.arg("-dynamiclib");
+    }
+
+    // Extra objects/libraries from --link flags (compile .c/.rs files on the fly)
+    let tmp_ref = &tmp;
+    for extra in &options.extra_link_objects {
+        if extra.extension().is_some_and(|e| e == "c") {
+            let c_obj = tmp_ref.join(
+                extra
+                    .file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string()
+                    + ".o",
+            );
+            run_command(
+                Command::new(cc_command().get_program())
+                    .arg("-c")
+                    .arg("-Iruntime")
+                    .arg(extra)
+                    .arg("-o")
+                    .arg(&c_obj),
+                "cc (compile extra C file)",
+            )?;
+            link.arg(&c_obj);
+        } else if extra.extension().is_some_and(|e| e == "rs") {
+            let rs_lib = tmp_ref.join(
+                extra
+                    .file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string()
+                    + ".a",
+            );
+            run_command(
+                Command::new("rustc")
+                    .arg("--edition")
+                    .arg("2024")
+                    .arg("--crate-type")
+                    .arg("staticlib")
+                    .arg("-o")
+                    .arg(&rs_lib)
+                    .arg(extra),
+                "rustc (compile extra Rust file)",
+            )?;
+            link.arg(&rs_lib);
+        } else {
+            link.arg(extra);
+        }
     }
 
     // Link against the Mog runtime if present.
