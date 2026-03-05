@@ -198,26 +198,23 @@ for i in 0..50000 {
 
 The capacity is fixed at creation. `soa Particle[10000]` allocates space for exactly 10,000 elements. This is a deliberate tradeoff — fixed size enables the compiler to lay out memory optimally and elide bounds checks in release builds.
 
-## Compilation Backends: LLVM vs QBE
+## Compilation Backend: rqbe
 
-Mog compiles to native ARM64 and x86 binaries through two backends: LLVM and QBE. Both produce standalone executables — the difference is in compile speed versus runtime performance.
+Mog compiles to native ARM64 and x86 binaries through **rqbe**, a safe Rust implementation of the QBE backend. rqbe runs entirely in-process inside the `mogc` compiler — no external code generation tools are needed.
 
-**LLVM** is the mature, industrial-strength backend. It applies aggressive optimizations — inlining, loop vectorization, dead code elimination, register allocation — and produces fast binaries. The cost is compile time. LLVM's optimization pipeline is large and thorough.
+The compilation pipeline is: Mog source → Rust compiler frontend (lexer → parser → analyzer → QBE codegen) → rqbe (in-process, safe Rust) → system assembler → system linker. The frontend and backend are a single Rust binary (`mogc`), built with `cargo build --release --manifest-path compiler/Cargo.toml`.
 
-**QBE** is a lightweight backend — roughly 14,000 lines of C. It compiles significantly faster than LLVM but produces less optimized output. QBE focuses on correctness and simplicity over peak performance.
+rqbe focuses on correctness and fast compile times over peak optimization. It does not apply aggressive optimizations like inlining or loop vectorization, but it produces correct, reasonably efficient native code. For the short-lived embedded scripts Mog targets, compile speed matters more than extracting the last percent of runtime performance.
 
-The practical tradeoffs:
+| Property | rqbe |
+|---|---|
+| Language | Safe Rust (in-process) |
+| Compile speed | Fast — milliseconds for typical scripts |
+| Runtime performance | Good, not aggressively optimized |
+| Target architectures | ARM64, x86 |
+| External dependencies | System assembler + linker only |
 
-| | LLVM | QBE |
-|---|---|---|
-| Compile speed | Slower | ~2x faster |
-| Runtime performance | Better (at -O1) | Good, not optimized |
-| Binary size | Comparable | Comparable |
-| Target architectures | ARM64, x86 | ARM64, x86 |
-
-During development, QBE's faster compile times shorten the edit-run cycle. For production or performance-sensitive scripts, LLVM at `-O1` produces better runtime results.
-
-Both backends compile Mog through the same frontend — parsing, analysis, and type checking are identical. The divergence happens at code generation: one path emits LLVM IR, the other emits QBE IL. Both then link against the same C runtime library (which provides the garbage collector, tensor operations, async runtime, and host bindings).
+The generated code links against the same C runtime library (which provides the garbage collector, tensor operations, async runtime, and host bindings).
 
 ## The Interrupt System
 

@@ -150,17 +150,20 @@ Semicolons are required after every statement. Curly braces delimit blocks. If y
 
 ## How Mog Programs Are Compiled and Run
 
-Mog is a compiled language. You write a `.mog` source file, compile it to a native executable, and run the executable. The compiler is written in TypeScript and runs under Bun:
+Mog is a compiled language. You write a `.mog` source file, compile it to a native executable, and run the executable. The compiler is written in Rust:
 
 ```bash
+# Build the compiler (once)
+cargo build --release --manifest-path compiler/Cargo.toml
+
 # Compile a Mog program to a native executable
-bun run src/index.ts hello.mog
+mogc hello.mog
 
 # Run the resulting binary
 ./hello
 ```
 
-The compilation pipeline works like this: the compiler reads your `.mog` file, lexes it into tokens, parses it into an abstract syntax tree, type-checks it, generates LLVM IR, and links it with the Mog runtime to produce a native binary. The whole process takes milliseconds for small programs.
+The compilation pipeline works like this: the Rust compiler reads your `.mog` file, lexes it into tokens, parses it into an abstract syntax tree, analyzes and type-checks it, generates QBE intermediate language, and passes it to rqbe (a safe Rust QBE backend that runs in-process). rqbe emits assembly, which the system assembler and linker turn into a native binary linked with the Mog runtime. The whole process takes milliseconds for small programs.
 
 There is also a convenience script that compiles, links, and runs in a single step:
 
@@ -172,7 +175,7 @@ In production, Mog programs run embedded inside a host application. The host com
 
 There is a third compilation mode: **plugins**. You can compile a `.mog` file into a shared library (`.dylib` on macOS, `.so` on Linux) instead of a standalone executable. The host loads the library at runtime with `dlopen`, queries what functions are available, and calls them by name. Functions marked `pub` in the source become exported symbols; everything else gets internal linkage and is invisible to the loader. This is the right path when you want pre-compiled, hot-swappable modules — the host never sees the source code, just a binary it can load and unload. See Chapter 15 for the full plugin API.
 
-Mog also has a lightweight QBE backend as an alternative to LLVM. QBE compiles roughly twice as fast as LLVM with `-O1`, at the cost of less optimized output. Both backends produce correct native code from the same source.
+The compiler uses rqbe, a safe Rust implementation of the QBE backend, as its code generation engine. rqbe runs entirely in-process — no external tools are needed beyond the system assembler and linker. It compiles fast and produces correct native code for ARM64 and x86.
 
 ## Program Structure
 
@@ -7355,7 +7358,7 @@ Capabilities are the only way for Mog code to interact with the outside world. T
 
 Mog is designed to be embedded. It's a scripting language that runs inside your application, not a standalone runtime. The host creates a VM, decides what the script can do, enforces resource limits, and tears everything down when it's finished.
 
-This chapter covers the C API that makes embedding work.
+This chapter covers the embedding API. Rust is now the primary host language, though C hosts continue to work.
 
 ## The Embedding Lifecycle
 
@@ -7370,36 +7373,65 @@ Every embedded Mog program follows the same five-step lifecycle:
   5. Free the VM
 ```
 
-Here's the minimal version in C:
+Here's the minimal version in Rust (compiled with `mogc --link host.rs`):
+
+```rust
+// host.rs — Rust host for a Mog program
+use std::ptr;
+
+extern "C" {
+    fn mog_vm_new() -> *mut u8;
+    fn mog_vm_set_global(vm: *mut u8);
+    fn mog_register_posix_host(vm: *mut u8);
+    fn mog_vm_set_limits(vm: *mut u8, limits: *const MogLimits);
+    fn mog_vm_free(vm: *mut u8);
+    fn program_user() -> i32;
+}
+
+#[repr(C)]
+struct MogLimits {
+    max_memory: u64,
+    max_cpu_ms: u64,
+    max_stack_depth: u64,
+}
+
+// Pre-main initialization on macOS — runs before main()
+#[unsafe(link_section = "__DATA,__mod_init_func")]
+#[used]
+static INIT: unsafe extern "C" fn() = {
+    unsafe extern "C" fn init() {
+        let vm = mog_vm_new();
+        mog_vm_set_global(vm);
+        mog_register_posix_host(vm);
+        let limits = MogLimits { max_memory: 0, max_cpu_ms: 5000, max_stack_depth: 0 };
+        mog_vm_set_limits(vm, &limits);
+    }
+    init
+};
+```
+
+The `--link` flag tells `mogc` to compile and link host files alongside the generated code. `mog_vm_set_global()` stores the VM pointer in a global so that generated code can find it. `program_user()` is the entry point the Mog compiler produces from the script's `main` function.
+
+The same lifecycle works from C — use `--link host.c` instead:
 
 ```c
 #include "mog.h"
 
 int main(void) {
-  // 1. Create the VM
   MogVM *vm = mog_vm_new();
   mog_vm_set_global(vm);
-
-  // 2. Register built-in capabilities (fs + process)
   mog_register_posix_host(vm);
-
-  // 3. Set resource limits
   MogLimits limits = { .max_cpu_ms = 5000 };
   mog_vm_set_limits(vm, &limits);
-
-  // 4. Run the compiled program
-  //    (program_user is generated by the Mog compiler)
   int result = program_user();
-
-  // 5. Cleanup
   mog_vm_free(vm);
   return result;
 }
 ```
 
-`mog_vm_set_global()` stores the VM pointer in a global so that generated code can find it. `program_user()` is the entry point the Mog compiler produces from the script's `main` function.
+## The Embedding API
 
-## The C API
+The API is defined as C-compatible functions, callable from both Rust (`extern "C"`) and C (`#include "mog.h"`). The `--link file.rs` flag compiles Rust host files and links them with the generated code. `--link file.c` does the same for C files.
 
 ### VM Lifecycle
 
@@ -7498,9 +7530,72 @@ capability env {
 
 This tells the compiler what functions exist and what their types are. See Chapter 14 for more on `.mogdecl` files.
 
-### Step 2: Implement the Host Functions in C
+### Step 2: Implement the Host Functions
 
-Every host function has the same signature: it takes a `MogVM*` and `MogArgs*` and returns a `MogValue`. Extract arguments with `mog_arg_int`, `mog_arg_string`, etc. Return values with `mog_int`, `mog_string`, etc.
+Every host function has the same C-compatible signature: it takes a `MogVM*` and `MogArgs*` and returns a `MogValue`. Here is the Rust implementation (compiled via `mogc --link host.rs`):
+
+```rust
+// host.rs — Rust host implementing the "env" capability
+use std::ffi::{CStr, CString};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+#[repr(C)]
+struct MogValue { tag: i32, data: [u8; 16] }
+#[repr(C)]
+struct MogCapEntry { name: *const i8, func: Option<unsafe extern "C" fn(*mut u8, *mut u8) -> MogValue> }
+
+extern "C" {
+    fn mog_vm_new() -> *mut u8;
+    fn mog_vm_set_global(vm: *mut u8);
+    fn mog_register_capability(vm: *mut u8, name: *const i8, entries: *const MogCapEntry);
+    fn mog_string(s: *const i8) -> MogValue;
+    fn mog_int(v: i64) -> MogValue;
+    fn mog_none() -> MogValue;
+    fn mog_arg_int(args: *mut u8, index: i32) -> i64;
+    fn mog_arg_string(args: *mut u8, index: i32) -> *const i8;
+}
+
+unsafe extern "C" fn host_get_name(_vm: *mut u8, _args: *mut u8) -> MogValue {
+    mog_string(c"MogShowcase".as_ptr())
+}
+
+unsafe extern "C" fn host_get_version(_vm: *mut u8, _args: *mut u8) -> MogValue {
+    mog_int(1)
+}
+
+unsafe extern "C" fn host_timestamp(_vm: *mut u8, _args: *mut u8) -> MogValue {
+    let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
+    mog_int(ts)
+}
+
+unsafe extern "C" fn host_log(_vm: *mut u8, args: *mut u8) -> MogValue {
+    let msg = CStr::from_ptr(mog_arg_string(args, 0));
+    eprintln!("[mog] {}", msg.to_str().unwrap_or("?"));
+    mog_none()
+}
+
+#[no_mangle]
+static ENV_FUNCTIONS: [MogCapEntry; 5] = [
+    MogCapEntry { name: c"get_name".as_ptr(),    func: Some(host_get_name)    },
+    MogCapEntry { name: c"get_version".as_ptr(),  func: Some(host_get_version) },
+    MogCapEntry { name: c"timestamp".as_ptr(),    func: Some(host_timestamp)   },
+    MogCapEntry { name: c"log".as_ptr(),          func: Some(host_log)         },
+    MogCapEntry { name: std::ptr::null(),          func: None                   }, // sentinel
+];
+
+#[unsafe(link_section = "__DATA,__mod_init_func")]
+#[used]
+static INIT: unsafe extern "C" fn() = {
+    unsafe extern "C" fn init() {
+        let vm = mog_vm_new();
+        mog_register_capability(vm, c"env".as_ptr(), ENV_FUNCTIONS.as_ptr());
+        mog_vm_set_global(vm);
+    }
+    init
+};
+```
+
+The same capability can be implemented in C (compiled via `mogc --link host.c`):
 
 ```c
 #include "mog.h"
@@ -7542,6 +7637,10 @@ static MogValue host_log(MogVM *vm, MogArgs *args) {
 
 ### Step 3: Build the Registration Table and Register
 
+In Rust, the registration table is a static array of `MogCapEntry` structs (shown in Step 2 above). The `#[unsafe(link_section = "__DATA,__mod_init_func")]` attribute ensures registration runs before `main()` on macOS.
+
+The equivalent C registration:
+
 ```c
 static const MogCapEntry env_functions[] = {
   { "get_name",     host_get_name     },
@@ -7578,7 +7677,7 @@ fn main() -> int {
 }
 ```
 
-The compiler checks the calls against `env.mogdecl`. At runtime, the VM routes each call to the corresponding C function.
+The compiler checks the calls against `env.mogdecl`. At runtime, the VM routes each call to the corresponding host function (whether implemented in Rust or C).
 
 ## MogValue: Data Exchange Between Host and Script
 
@@ -7779,7 +7878,7 @@ if (mog_interrupt_requested()) {
 }
 ```
 
-> **Tip:** The cooperative interrupt model means a script that blocks inside a host function (e.g., a long-running C call) cannot be interrupted until it returns to Mog code. Keep host functions short, or implement your own cancellation within long-running C functions.
+> **Tip:** The cooperative interrupt model means a script that blocks inside a host function (e.g., a long-running Rust or C call) cannot be interrupted until it returns to Mog code. Keep host functions short, or implement your own cancellation within long-running host functions.
 
 ### Complete Timeout Example
 
@@ -7950,7 +8049,7 @@ The script has access to exactly the game functions the host provides. It cannot
 | `mog_vm_set_limits(vm, &limits)` | Set resource limits |
 | `mog_arm_timeout(ms)` | Arm a timeout timer |
 | `mog_request_interrupt()` | Request script termination |
-| `mog_cap_call(vm, cap, fn, args, n)` | Call a capability from C |
+| `mog_cap_call(vm, cap, fn, args, n)` | Call a capability from the host |
 | `mog_int(v)`, `mog_string(s)`, ... | Construct a MogValue |
 | `mog_arg_int(args, i)`, ... | Extract an argument |
 
@@ -7966,8 +8065,8 @@ This is the right model when you need hot-swappable logic, third-party extension
 
 A plugin is a pre-compiled Mog shared library. It contains:
 
-- One or more exported functions callable from C
-- A built-in copy of the Mog runtime (GC, value representation, etc.)
+- One or more exported functions callable from the host (Rust or C)
+- Access to the host's runtime globals (GC, value representation, etc.) via `-undefined dynamic_lookup` on macOS
 - Metadata: plugin name, version, and export table
 
 The key difference from direct embedding:
@@ -8025,32 +8124,22 @@ Any top-level statements in the file run during plugin initialization, before th
 
 ### Compiling a Plugin
 
-Use the `compilePluginToSharedLib()` API from TypeScript/Bun:
+Use the `mogc` CLI with the `--plugin` flag:
 
-```typescript
-import { compilePluginToSharedLib } from './src/compiler.ts';
-import { readFileSync } from 'fs';
-
-const source = readFileSync('math_plugin.mog', 'utf-8');
-const result = await compilePluginToSharedLib(
-  source,
-  'math_plugin',         // plugin name
-  'math_plugin.dylib',   // output path
-  '1.0.0'                // version
-);
-
-if (result.errors.length > 0) {
-  for (const e of result.errors) {
-    console.error(`[${e.line}:${e.column}] ${e.message}`);
-  }
-}
+```bash
+# Compile a plugin to a shared library
+mogc --plugin math_plugin.mog -o math_plugin.dylib
 ```
 
-The compiler runs the full pipeline: Mog source → LLVM IR → position-independent object code → shared library. The resulting `.dylib` is self-contained — it includes the Mog runtime, so the host doesn't need to link against anything beyond `mog_plugin.h`.
+The compiler runs the full pipeline: Mog source → Rust compiler (lexer→parser→analyzer→QBE codegen) → rqbe → system assembler → system linker (with `-dynamiclib`). On macOS, plugins are linked with `-undefined dynamic_lookup` so they resolve runtime symbols (GC, VM globals, etc.) from the host process at load time rather than bundling their own copy.
 
-### Loading and Calling Plugins from C
+The host executable must be linked with `-Wl,-export_dynamic` (or `-Wl,-export_dynamic` equivalent for your platform) to make runtime symbols visible to loaded plugins.
 
-Include `mog_plugin.h` alongside the standard `mog.h` header.
+For an async plugin example, see `examples/plugins/async_plugin_demo/`.
+
+### Loading and Calling Plugins
+
+Plugins are loaded via the C-compatible API, callable from both Rust and C. Include `mog_plugin.h` alongside the standard `mog.h` header for C hosts.
 
 ```c
 #include <stdio.h>
@@ -8139,9 +8228,11 @@ Under the hood, the compiler generates four symbols in every plugin shared libra
 - **`mog_plugin_exports(int*)`** — returns an array of `{name, func_ptr}` pairs and writes the count to the output parameter.
 - **Exported wrappers** — each `pub fn foo(...)` gets a `mogp_foo` wrapper with default (visible) linkage. Internal functions are emitted with `internal` linkage so they exist in the binary but are invisible to `dlopen`/`dlsym`.
 
+Because plugins use `-undefined dynamic_lookup` on macOS, they share the host's runtime globals (GC heap, VM pointer, interrupt flag). This means a plugin does not bundle its own copy of the runtime — it resolves those symbols from the host process at load time. The host must be linked with `-Wl,-export_dynamic` to export these symbols.
+
 `mog_load_plugin` calls these in order: resolve `mog_plugin_info` to validate compatibility, call `mog_plugin_init` to set up the runtime, then call `mog_plugin_exports` to build the dispatch table. After that, `mog_plugin_call` is just a name lookup and function pointer call.
 
-You don't need to know any of this to use plugins. It's documented here so you can debug issues, write tooling, or implement plugin loaders in languages other than C.
+You don't need to know any of this to use plugins. It's documented here so you can debug issues, write tooling, or implement plugin loaders in languages other than C or Rust.
 
 # Chapter 16: Tensors — N-Dimensional Arrays
 
@@ -8827,26 +8918,23 @@ for i in 0..50000 {
 
 The capacity is fixed at creation. `soa Particle[10000]` allocates space for exactly 10,000 elements. This is a deliberate tradeoff — fixed size enables the compiler to lay out memory optimally and elide bounds checks in release builds.
 
-## Compilation Backends: LLVM vs QBE
+## Compilation Backend: rqbe
 
-Mog compiles to native ARM64 and x86 binaries through two backends: LLVM and QBE. Both produce standalone executables — the difference is in compile speed versus runtime performance.
+Mog compiles to native ARM64 and x86 binaries through **rqbe**, a safe Rust implementation of the QBE backend. rqbe runs entirely in-process inside the `mogc` compiler — no external code generation tools are needed.
 
-**LLVM** is the mature, industrial-strength backend. It applies aggressive optimizations — inlining, loop vectorization, dead code elimination, register allocation — and produces fast binaries. The cost is compile time. LLVM's optimization pipeline is large and thorough.
+The compilation pipeline is: Mog source → Rust compiler frontend (lexer → parser → analyzer → QBE codegen) → rqbe (in-process, safe Rust) → system assembler → system linker. The frontend and backend are a single Rust binary (`mogc`), built with `cargo build --release --manifest-path compiler/Cargo.toml`.
 
-**QBE** is a lightweight backend — roughly 14,000 lines of C. It compiles significantly faster than LLVM but produces less optimized output. QBE focuses on correctness and simplicity over peak performance.
+rqbe focuses on correctness and fast compile times over peak optimization. It does not apply aggressive optimizations like inlining or loop vectorization, but it produces correct, reasonably efficient native code. For the short-lived embedded scripts Mog targets, compile speed matters more than extracting the last percent of runtime performance.
 
-The practical tradeoffs:
+| Property | rqbe |
+|---|---|
+| Language | Safe Rust (in-process) |
+| Compile speed | Fast — milliseconds for typical scripts |
+| Runtime performance | Good, not aggressively optimized |
+| Target architectures | ARM64, x86 |
+| External dependencies | System assembler + linker only |
 
-| | LLVM | QBE |
-|---|---|---|
-| Compile speed | Slower | ~2x faster |
-| Runtime performance | Better (at -O1) | Good, not optimized |
-| Binary size | Comparable | Comparable |
-| Target architectures | ARM64, x86 | ARM64, x86 |
-
-During development, QBE's faster compile times shorten the edit-run cycle. For production or performance-sensitive scripts, LLVM at `-O1` produces better runtime results.
-
-Both backends compile Mog through the same frontend — parsing, analysis, and type checking are identical. The divergence happens at code generation: one path emits LLVM IR, the other emits QBE IL. Both then link against the same C runtime library (which provides the garbage collector, tensor operations, async runtime, and host bindings).
+The generated code links against the same C runtime library (which provides the garbage collector, tensor operations, async runtime, and host bindings).
 
 ## The Interrupt System
 

@@ -19,17 +19,20 @@ Semicolons are required after every statement. Curly braces delimit blocks. If y
 
 ## How Mog Programs Are Compiled and Run
 
-Mog is a compiled language. You write a `.mog` source file, compile it to a native executable, and run the executable. The compiler is written in TypeScript and runs under Bun:
+Mog is a compiled language. You write a `.mog` source file, compile it to a native executable, and run the executable. The compiler is written in Rust:
 
 ```bash
+# Build the compiler (once)
+cargo build --release --manifest-path compiler/Cargo.toml
+
 # Compile a Mog program to a native executable
-bun run src/index.ts hello.mog
+mogc hello.mog
 
 # Run the resulting binary
 ./hello
 ```
 
-The compilation pipeline works like this: the compiler reads your `.mog` file, lexes it into tokens, parses it into an abstract syntax tree, type-checks it, generates LLVM IR, and links it with the Mog runtime to produce a native binary. The whole process takes milliseconds for small programs.
+The compilation pipeline works like this: the Rust compiler reads your `.mog` file, lexes it into tokens, parses it into an abstract syntax tree, analyzes and type-checks it, generates QBE intermediate language, and passes it to rqbe (a safe Rust QBE backend that runs in-process). rqbe emits assembly, which the system assembler and linker turn into a native binary linked with the Mog runtime. The whole process takes milliseconds for small programs.
 
 There is also a convenience script that compiles, links, and runs in a single step:
 
@@ -41,7 +44,7 @@ In production, Mog programs run embedded inside a host application. The host com
 
 There is a third compilation mode: **plugins**. You can compile a `.mog` file into a shared library (`.dylib` on macOS, `.so` on Linux) instead of a standalone executable. The host loads the library at runtime with `dlopen`, queries what functions are available, and calls them by name. Functions marked `pub` in the source become exported symbols; everything else gets internal linkage and is invisible to the loader. This is the right path when you want pre-compiled, hot-swappable modules — the host never sees the source code, just a binary it can load and unload. See Chapter 15 for the full plugin API.
 
-Mog also has a lightweight QBE backend as an alternative to LLVM. QBE compiles roughly twice as fast as LLVM with `-O1`, at the cost of less optimized output. Both backends produce correct native code from the same source.
+The compiler uses rqbe, a safe Rust implementation of the QBE backend, as its code generation engine. rqbe runs entirely in-process — no external tools are needed beyond the system assembler and linker. It compiles fast and produces correct native code for ARM64 and x86.
 
 ## Program Structure
 

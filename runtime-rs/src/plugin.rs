@@ -6,6 +6,8 @@
 use std::ffi::CStr;
 use std::ptr;
 
+use blake3;
+
 // ---------------------------------------------------------------------------
 // MogValue — 24-byte tagged union (same definition as posix.rs).
 // We re-define it here so this module is self-contained.
@@ -507,4 +509,71 @@ pub extern "C" fn mog_unload_plugin(plugin: *mut u8) {
         }
         libc::free(plugin as *mut libc::c_void);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Hash-verified plugin loading
+// ---------------------------------------------------------------------------
+
+/// Load a plugin after verifying its BLAKE3 hash matches `expected_hash`.
+///
+/// `expected_hash` must be a NUL-terminated hex-encoded BLAKE3 string (64 hex
+/// chars + NUL).  If the file's computed hash does not match, the plugin is
+/// **not** loaded and `NULL` is returned (with an error in `mog_plugin_error`).
+#[unsafe(no_mangle)]
+pub extern "C" fn mog_load_plugin_verified(path: *const u8, expected_hash: *const u8) -> *mut u8 {
+    // Clear previous error
+    PLUGIN_ERROR.with(|buf| {
+        buf.borrow_mut()[0] = 0;
+    });
+
+    if path.is_null() {
+        set_plugin_error("null path");
+        return ptr::null_mut();
+    }
+    if expected_hash.is_null() {
+        set_plugin_error("null expected hash");
+        return ptr::null_mut();
+    }
+
+    // Read the expected hash string
+    let expected = unsafe {
+        match CStr::from_ptr(expected_hash as *const libc::c_char).to_str() {
+            Ok(s) => s,
+            Err(_) => {
+                set_plugin_error("expected hash is not valid UTF-8");
+                return ptr::null_mut();
+            }
+        }
+    };
+
+    // Read the path string
+    let path_str = unsafe {
+        match CStr::from_ptr(path as *const libc::c_char).to_str() {
+            Ok(s) => s,
+            Err(_) => {
+                set_plugin_error("path is not valid UTF-8");
+                return ptr::null_mut();
+            }
+        }
+    };
+
+    // Read the binary and compute its BLAKE3 hash
+    let binary_bytes = match std::fs::read(path_str) {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            set_plugin_error_fmt(&["failed to read plugin file: ", path_str]);
+            return ptr::null_mut();
+        }
+    };
+
+    let computed = blake3::hash(&binary_bytes).to_hex().to_string();
+
+    if computed != expected {
+        set_plugin_error_fmt(&["hash mismatch: expected ", expected, " but got ", &computed]);
+        return ptr::null_mut();
+    }
+
+    // Hash verified — delegate to the standard loader
+    mog_load_plugin(path)
 }

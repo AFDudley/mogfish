@@ -196,7 +196,7 @@ fn demo_capability_sandbox() {
     println!("Compiling a plugin that requires the env capability...");
 
     match mog::compiler::compile_plugin(source, "cap_test_plugin", "0.1.0") {
-        Ok(lib_path) => {
+        Ok((lib_path, _hash)) => {
             println!("  Compiled to: {}", lib_path.display());
             println!("  In a real host, we would check the plugin required");
             println!("  capabilities against the VM registered caps before");
@@ -247,20 +247,22 @@ fn main() {
     // --- Step 1: Compile to a plugin shared library ---
     println!("[1/3] Compiling math_plugin.mog to a shared library...");
 
-    let lib_path = match mog::compiler::compile_plugin(&source, "math_plugin", "1.0.0") {
-        Ok(path) => {
-            println!("      -> {}", path.display());
-            println!();
-            path
-        }
-        Err(errors) => {
-            eprintln!("Compilation failed:");
-            for e in &errors {
-                eprintln!("  {e}");
+    let (lib_path, _plugin_hash) =
+        match mog::compiler::compile_plugin(&source, "math_plugin", "1.0.0") {
+            Ok(result) => {
+                println!("      -> {}", result.0.display());
+                println!("      blake3: {}", result.1);
+                println!();
+                result
             }
-            process::exit(1);
-        }
-    };
+            Err(errors) => {
+                eprintln!("Compilation failed:");
+                for e in &errors {
+                    eprintln!("  {e}");
+                }
+                process::exit(1);
+            }
+        };
 
     // --- Step 2: Load the plugin ---
     println!("[2/3] Loading plugin via libloading...");

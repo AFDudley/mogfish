@@ -11,6 +11,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use blake3;
+
 use crate::ast::{Statement, StatementKind};
 use crate::capability::{parse_capability_decl, CapabilityDecl};
 use crate::token::TokenType;
@@ -106,6 +108,9 @@ pub struct CompileResult {
     pub errors: Vec<String>,
     /// Non-fatal warnings.
     pub warnings: Vec<String>,
+    /// BLAKE3 hash of the compiled plugin binary (hex-encoded).
+    /// Only populated by `compile_plugin()`; `None` for regular compilations.
+    pub plugin_hash: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -136,6 +141,7 @@ pub fn compile(source: &str, options: &CompileOptions) -> CompileResult {
             ir: String::new(),
             errors,
             warnings,
+            plugin_hash: None,
         };
     }
 
@@ -168,6 +174,7 @@ pub fn compile(source: &str, options: &CompileOptions) -> CompileResult {
             ir: String::new(),
             errors,
             warnings,
+            plugin_hash: None,
         };
     }
 
@@ -188,6 +195,7 @@ pub fn compile(source: &str, options: &CompileOptions) -> CompileResult {
         ir,
         errors,
         warnings,
+        plugin_hash: None,
     }
 }
 
@@ -339,7 +347,14 @@ pub fn compile_to_binary(source: &str, options: &CompileOptions) -> Result<PathB
 ///
 /// On macOS this produces a `.dylib`; on Linux a `.so`.  The resulting
 /// library exposes plugin metadata symbols and uses PIC relocation.
-pub fn compile_plugin(source: &str, name: &str, version: &str) -> Result<PathBuf, Vec<String>> {
+///
+/// Returns `(path, blake3_hex)` — the path to the compiled library and its
+/// BLAKE3 hash as a lowercase hex string.
+pub fn compile_plugin(
+    source: &str,
+    name: &str,
+    version: &str,
+) -> Result<(PathBuf, String), Vec<String>> {
     let options = CompileOptions {
         plugin_mode: true,
         plugin_name: Some(name.to_string()),
@@ -490,7 +505,12 @@ pub fn compile_plugin(source: &str, name: &str, version: &str) -> Result<PathBuf
     let _ = fs::remove_file(&asm_path);
     let _ = fs::remove_file(&obj_path);
 
-    Ok(lib_path)
+    // --- compute BLAKE3 hash of the compiled binary -------------------------
+    let binary_bytes = fs::read(&lib_path)
+        .map_err(|e| vec![format!("failed to read compiled plugin for hashing: {e}")])?;
+    let hash_hex = blake3::hash(&binary_bytes).to_hex().to_string();
+
+    Ok((lib_path, hash_hex))
 }
 
 // ---------------------------------------------------------------------------

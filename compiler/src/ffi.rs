@@ -213,7 +213,7 @@ pub extern "C" fn mog_compile_plugin(
     };
 
     match crate::compiler::compile_plugin(input, _name, _version) {
-        Ok(lib_path) => {
+        Ok((lib_path, _hash)) => {
             // If the caller specified a different output path, copy the file there.
             let target = PathBuf::from(_path);
             if lib_path != target {

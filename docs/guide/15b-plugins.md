@@ -8,8 +8,8 @@ This is the right model when you need hot-swappable logic, third-party extension
 
 A plugin is a pre-compiled Mog shared library. It contains:
 
-- One or more exported functions callable from C
-- A built-in copy of the Mog runtime (GC, value representation, etc.)
+- One or more exported functions callable from the host (Rust or C)
+- Access to the host's runtime globals (GC, value representation, etc.) via `-undefined dynamic_lookup` on macOS
 - Metadata: plugin name, version, and export table
 
 The key difference from direct embedding:
@@ -67,32 +67,22 @@ Any top-level statements in the file run during plugin initialization, before th
 
 ## Compiling a Plugin
 
-Use the `compilePluginToSharedLib()` API from TypeScript/Bun:
+Use the `mogc` CLI with the `--plugin` flag:
 
-```typescript
-import { compilePluginToSharedLib } from './src/compiler.ts';
-import { readFileSync } from 'fs';
-
-const source = readFileSync('math_plugin.mog', 'utf-8');
-const result = await compilePluginToSharedLib(
-  source,
-  'math_plugin',         // plugin name
-  'math_plugin.dylib',   // output path
-  '1.0.0'                // version
-);
-
-if (result.errors.length > 0) {
-  for (const e of result.errors) {
-    console.error(`[${e.line}:${e.column}] ${e.message}`);
-  }
-}
+```bash
+# Compile a plugin to a shared library
+mogc --plugin math_plugin.mog -o math_plugin.dylib
 ```
 
-The compiler runs the full pipeline: Mog source → LLVM IR → position-independent object code → shared library. The resulting `.dylib` is self-contained — it includes the Mog runtime, so the host doesn't need to link against anything beyond `mog_plugin.h`.
+The compiler runs the full pipeline: Mog source → Rust compiler (lexer→parser→analyzer→QBE codegen) → rqbe → system assembler → system linker (with `-dynamiclib`). On macOS, plugins are linked with `-undefined dynamic_lookup` so they resolve runtime symbols (GC, VM globals, etc.) from the host process at load time rather than bundling their own copy.
 
-## Loading and Calling Plugins from C
+The host executable must be linked with `-Wl,-export_dynamic` (or `-Wl,-export_dynamic` equivalent for your platform) to make runtime symbols visible to loaded plugins.
 
-Include `mog_plugin.h` alongside the standard `mog.h` header.
+For an async plugin example, see `examples/plugins/async_plugin_demo/`.
+
+## Loading and Calling Plugins
+
+Plugins are loaded via the C-compatible API, callable from both Rust and C. Include `mog_plugin.h` alongside the standard `mog.h` header for C hosts.
 
 ```c
 #include <stdio.h>
@@ -181,6 +171,8 @@ Under the hood, the compiler generates four symbols in every plugin shared libra
 - **`mog_plugin_exports(int*)`** — returns an array of `{name, func_ptr}` pairs and writes the count to the output parameter.
 - **Exported wrappers** — each `pub fn foo(...)` gets a `mogp_foo` wrapper with default (visible) linkage. Internal functions are emitted with `internal` linkage so they exist in the binary but are invisible to `dlopen`/`dlsym`.
 
+Because plugins use `-undefined dynamic_lookup` on macOS, they share the host's runtime globals (GC heap, VM pointer, interrupt flag). This means a plugin does not bundle its own copy of the runtime — it resolves those symbols from the host process at load time. The host must be linked with `-Wl,-export_dynamic` to export these symbols.
+
 `mog_load_plugin` calls these in order: resolve `mog_plugin_info` to validate compatibility, call `mog_plugin_init` to set up the runtime, then call `mog_plugin_exports` to build the dispatch table. After that, `mog_plugin_call` is just a name lookup and function pointer call.
 
-You don't need to know any of this to use plugins. It's documented here so you can debug issues, write tooling, or implement plugin loaders in languages other than C.
+You don't need to know any of this to use plugins. It's documented here so you can debug issues, write tooling, or implement plugin loaders in languages other than C or Rust.

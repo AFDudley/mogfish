@@ -194,14 +194,28 @@ fn main() {
     .expect("failed to copy mogdecl");
 
     println!("--- Step 1: Compiling async_plugin.mog to shared library ---");
-    let dylib_path = mog::compiler::compile_plugin(&mog_source, "async_plugin", "1.0.0")
-        .expect("compilation failed");
+    let (dylib_path, plugin_hash) =
+        mog::compiler::compile_plugin(&mog_source, "async_plugin", "1.0.0")
+            .expect("compilation failed");
     println!("  compiled: {}", dylib_path.display());
+    println!("  blake3:   {}", plugin_hash);
 
     // -----------------------------------------------------------------------
-    // Step 2: Load the plugin via dlopen (libloading)
+    // Step 2: Verify hash and load the plugin via dlopen (libloading)
     // -----------------------------------------------------------------------
-    println!("\n--- Step 2: Loading plugin via dlopen ---");
+    println!("\n--- Step 2: Verifying plugin hash and loading via dlopen ---");
+
+    // Re-compute the hash from the file on disk and verify it matches
+    {
+        let bytes = std::fs::read(&dylib_path).expect("failed to read plugin for verification");
+        let computed_hex = blake3::hash(&bytes).to_hex().to_string();
+        assert_eq!(
+            computed_hex, plugin_hash,
+            "plugin hash verification failed: file may have been tampered with"
+        );
+        println!("  hash verified: {}", &plugin_hash[..16]);
+    }
+
     let lib = unsafe { Library::new(&dylib_path) }.expect("dlopen failed");
 
     // Look up plugin protocol symbols

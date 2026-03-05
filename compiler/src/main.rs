@@ -105,8 +105,9 @@ fn main() {
     // Plugin mode
     if let Some(name) = plugin_name {
         match compile_plugin(&source, &name, &plugin_version) {
-            Ok(path) => {
+            Ok((path, hash)) => {
                 eprintln!("compiled plugin: {}", path.display());
+                eprintln!("blake3: {hash}");
             }
             Err(errors) => {
                 for e in &errors {

@@ -11,6 +11,7 @@ use std::ffi::{c_char, c_void, CStr};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 
+use blake3;
 use mog::compiler;
 
 // Unique counter to avoid temp-dir collisions between parallel tests that
@@ -65,13 +66,13 @@ fn math_plugin_source() -> String {
 /// between parallel tests.  Returns the library path.
 ///
 /// Panics (skips) if the toolchain is not available.
-fn compile_math_plugin_unique(label: &str) -> PathBuf {
+fn compile_math_plugin_unique(label: &str) -> (PathBuf, String) {
     let n = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
     let name = format!("math_plugin_{label}_{n}");
     let source = math_plugin_source();
 
     match compiler::compile_plugin(&source, &name, "1.0.0") {
-        Ok(path) => path,
+        Ok((path, hash)) => (path, hash),
         Err(errors) => {
             let msg = errors.join("; ");
             if msg.contains("qbe") || msg.contains("runtime") || msg.contains("not found") {
@@ -89,7 +90,7 @@ fn compile_math_plugin_unique(label: &str) -> PathBuf {
 /// Test that compile_plugin produces a file that exists.
 #[test]
 fn plugin_compiles_to_dylib() {
-    let lib_path = compile_math_plugin_unique("dylib");
+    let (lib_path, _hash) = compile_math_plugin_unique("dylib");
     assert!(lib_path.exists(), "compiled plugin should exist on disk");
 
     let ext = lib_path.extension().unwrap().to_str().unwrap();
@@ -108,7 +109,7 @@ fn plugin_compiles_to_dylib() {
 #[test]
 #[ignore]
 fn plugin_info_is_correct() {
-    let lib_path = compile_math_plugin_unique("info");
+    let (lib_path, _hash) = compile_math_plugin_unique("info");
 
     let lib =
         unsafe { libloading::Library::new(&lib_path) }.expect("failed to load compiled plugin");
@@ -145,7 +146,7 @@ fn plugin_info_is_correct() {
 #[test]
 #[ignore]
 fn plugin_init_succeeds() {
-    let lib_path = compile_math_plugin_unique("init");
+    let (lib_path, _hash) = compile_math_plugin_unique("init");
 
     let lib =
         unsafe { libloading::Library::new(&lib_path) }.expect("failed to load compiled plugin");
@@ -164,7 +165,7 @@ fn plugin_init_succeeds() {
 #[test]
 #[ignore]
 fn plugin_function_calls() {
-    let lib_path = compile_math_plugin_unique("calls");
+    let (lib_path, _hash) = compile_math_plugin_unique("calls");
 
     let lib =
         unsafe { libloading::Library::new(&lib_path) }.expect("failed to load compiled plugin");
@@ -256,7 +257,7 @@ fn compile_bad_source_returns_error() {
         compiler::compile_plugin("this is not valid mog @@@@", "bad_plugin", "0.0.1")
     });
     match result {
-        Ok(Ok(path)) => {
+        Ok(Ok((path, _hash))) => {
             // If it somehow compiled, that's unexpected but not fatal.
             let _ = std::fs::remove_file(&path);
             panic!("bad source should not compile successfully");
@@ -278,7 +279,7 @@ fn compile_empty_source() {
     // This may succeed with warnings or fail — either is acceptable.
     // The key thing is it doesn't panic.
     match result {
-        Ok(path) => {
+        Ok((path, _hash)) => {
             // Clean up if it somehow succeeded
             let _ = std::fs::remove_file(&path);
         }
@@ -344,7 +345,7 @@ pub fn hello() -> int {
     // We don't assert success or failure — both are acceptable depending
     // on whether env.mogdecl is available.
     match result {
-        Ok(path) => {
+        Ok((path, _hash)) => {
             let _ = std::fs::remove_file(&path);
         }
         Err(errors) => {
@@ -353,4 +354,88 @@ pub fn hello() -> int {
             eprintln!("cap_plugin errors (expected): {:?}", errors);
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// BLAKE3 hash verification tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn compile_plugin_returns_valid_blake3_hash() {
+    let (lib_path, hash) = compile_math_plugin_unique("hash_format");
+
+    // Hash must be 64 lowercase hex characters (BLAKE3 = 32 bytes = 64 hex chars)
+    assert_eq!(hash.len(), 64, "BLAKE3 hex hash should be 64 characters");
+    assert!(
+        hash.chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+        "hash should be lowercase hex: {hash}"
+    );
+
+    let _ = std::fs::remove_file(&lib_path);
+}
+
+#[test]
+fn compile_plugin_hash_matches_file_on_disk() {
+    let (lib_path, hash) = compile_math_plugin_unique("hash_verify");
+
+    // Independently compute BLAKE3 of the file and compare
+    let bytes = std::fs::read(&lib_path).expect("failed to read compiled plugin");
+    let computed_hex = blake3::hash(&bytes).to_hex().to_string();
+
+    assert_eq!(
+        hash, computed_hex,
+        "hash from compile_plugin must match independently computed hash"
+    );
+
+    let _ = std::fs::remove_file(&lib_path);
+}
+
+#[test]
+fn compile_plugin_hash_changes_with_different_source() {
+    // Compile two plugins with different source code and verify their hashes differ
+    let n = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
+    let source_a = r#"
+pub fn add(a: int, b: int) -> int {
+    return a + b;
+}
+"#;
+    let source_b = r#"
+pub fn sub(a: int, b: int) -> int {
+    return a - b;
+}
+"#;
+    let name_a = format!("hash_diff_a_{n}");
+    let name_b = format!("hash_diff_b_{n}");
+
+    let result_a = compiler::compile_plugin(source_a, &name_a, "1.0.0");
+    let result_b = compiler::compile_plugin(source_b, &name_b, "1.0.0");
+
+    match (result_a, result_b) {
+        (Ok((path_a, hash_a)), Ok((path_b, hash_b))) => {
+            assert_ne!(
+                hash_a, hash_b,
+                "different source should produce different hashes"
+            );
+            let _ = std::fs::remove_file(&path_a);
+            let _ = std::fs::remove_file(&path_b);
+        }
+        _ => {
+            // If either fails to compile (e.g. missing toolchain), that's OK
+            eprintln!("skipping: one or both plugins failed to compile");
+        }
+    }
+}
+
+#[test]
+fn compile_result_has_none_hash_for_regular_compilation() {
+    // Regular compile() should always produce plugin_hash: None
+    let result = compiler::compile(
+        "pub fn foo() -> int { return 1; }",
+        &compiler::CompileOptions::default(),
+    );
+    assert!(
+        result.plugin_hash.is_none(),
+        "regular compilation should not set plugin_hash"
+    );
 }

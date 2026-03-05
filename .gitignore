@@ -52,3 +52,4 @@ compiler/target/
 /rqbe/target/
 runtime-rs/target/
 examples/plugins/async_plugin_demo/target/
+examples/plugins/rust_host/target/
