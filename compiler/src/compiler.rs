@@ -384,9 +384,33 @@ pub fn compile_plugin(source: &str, name: &str, version: &str) -> Result<PathBuf
         "as (assembler)",
     )?;
 
+    // --- create stub object for globals that need link-time addresses --------
+    // ARM64 ADRP+LDR addressing requires symbols to be resolvable at link
+    // time.  Global variables like `mog_interrupt_flag` can't be deferred via
+    // `-undefined dynamic_lookup`.  We create a tiny stub defining them so the
+    // linker can assign addresses; at runtime the host's actual definition
+    // takes priority because the plugin is loaded with RTLD_LOCAL.
+    let stub_c = tmp.join("_mog_stub.c");
+    let stub_o = tmp.join("_mog_stub.o");
+    fs::write(&stub_c, "volatile int mog_interrupt_flag = 0;\n")
+        .map_err(|e| vec![format!("failed to write stub: {e}")])?;
+    run_command(
+        Command::new(cc_command().get_program())
+            .arg("-c")
+            .arg("-fPIC")
+            .arg(&stub_c)
+            .arg("-o")
+            .arg(&stub_o),
+        "cc (compile stub)",
+    )?;
+
     // --- linker: object → shared library -----------------------------------
     let mut link = cc_command();
-    link.arg("-shared").arg("-o").arg(&lib_path).arg(&obj_path);
+    link.arg("-shared")
+        .arg("-o")
+        .arg(&lib_path)
+        .arg(&obj_path)
+        .arg(&stub_o);
 
     #[cfg(target_os = "macos")]
     {
@@ -441,14 +465,22 @@ pub fn compile_plugin(source: &str, name: &str, version: &str) -> Result<PathBuf
         }
     }
 
-    // Link against the Mog runtime if present.
-    if let Some(rt) = find_runtime_archive() {
-        link.arg(&rt);
-    }
-
+    // Do NOT link the Mog runtime into plugins — runtime symbols are resolved
+    // dynamically from the host binary at load time.  This ensures the plugin
+    // shares the host's global state (VM, event loop, GC heap, etc.).
     #[cfg(target_os = "macos")]
     {
+        link.arg("-undefined").arg("dynamic_lookup");
         link.arg("-lSystem");
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        // On Linux, unresolved symbols in shared objects are resolved at load
+        // time by default, so no extra flag is needed.  Link the runtime as a
+        // fallback in case the host doesn't export the symbols.
+        if let Some(rt) = find_runtime_archive() {
+            link.arg(&rt);
+        }
     }
     link.arg("-lm");
 

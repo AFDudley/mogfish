@@ -1,0 +1,3 @@
+capability compute {
+  async fn slow_square(x: int, delay_ms: int) -> int;
+}

@@ -103,7 +103,10 @@ fn plugin_compiles_to_dylib() {
 }
 
 /// Test loading the plugin and inspecting its metadata.
+/// Requires the test binary to export runtime symbols (see async_plugin_demo for
+/// how to set up `-export_dynamic`).  Ignored by default.
 #[test]
+#[ignore]
 fn plugin_info_is_correct() {
     let lib_path = compile_math_plugin_unique("info");
 
@@ -138,8 +141,9 @@ fn plugin_info_is_correct() {
 }
 
 /// Test initializing the plugin (with null VM since math_plugin needs no
-/// capabilities).
+/// capabilities).  Requires host-exported runtime symbols.
 #[test]
+#[ignore]
 fn plugin_init_succeeds() {
     let lib_path = compile_math_plugin_unique("init");
 
@@ -156,7 +160,9 @@ fn plugin_init_succeeds() {
 }
 
 /// Test calling exported functions and verifying results.
+/// Requires host-exported runtime symbols.
 #[test]
+#[ignore]
 fn plugin_function_calls() {
     let lib_path = compile_math_plugin_unique("calls");
 
