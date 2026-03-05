@@ -203,8 +203,8 @@ fn run_ssa_test(test_name: &str) {
         );
     }
 
-    // Cleanup temp files.
-    let _ = fs::remove_dir_all(&tmp_dir);
+    // Cleanup temp files (skip cleanup for debugging).
+    // let _ = fs::remove_dir_all(&tmp_dir);
 }
 
 // ---------------------------------------------------------------------------

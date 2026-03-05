@@ -875,13 +875,7 @@ fn apple_extsb(f: &mut Fn) {
 /// ABI lowering pass 1: full AAPCS64 lowering.
 ///
 /// Lowers parameters, calls, returns, and vararg instructions.
-pub fn abi1(f: &mut Fn, t: &Target) {
-    // We need types — get them from thread-local or pass them.
-    // In this port, types are not available through Fn directly.
-    // We use empty types as a placeholder; the compile pipeline must
-    // arrange for types to be available.
-    let typs: Vec<Typ> = Vec::new(); // TODO: plumb types through
-
+pub fn abi1(f: &mut Fn, t: &Target, typs: &[Typ]) {
     let rpo: Vec<BlkId> = f.rpo.clone();
 
     // Clear visit counters
@@ -901,7 +895,7 @@ pub fn abi1(f: &mut Fn, t: &Target) {
     };
     let par_ins: Vec<Ins> = f.blks[start.0 as usize].ins[..par_end].to_vec();
     let rest_ins: Vec<Ins> = f.blks[start.0 as usize].ins[par_end..].to_vec();
-    let (mut new_par_ins, params) = selpar(f, &par_ins, &typs, t.apple);
+    let (mut new_par_ins, params) = selpar(f, &par_ins, typs, t.apple);
     new_par_ins.extend_from_slice(&rest_ins);
     f.blks[start.0 as usize].ins = new_par_ins;
 
@@ -923,7 +917,7 @@ pub fn abi1(f: &mut Fn, t: &Target) {
         }
 
         let mut buf = InsBuffer::new();
-        selret(bid, f, &mut buf, &typs);
+        selret(bid, f, &mut buf, typs);
 
         let ins = std::mem::take(&mut f.blks[bid.0 as usize].ins);
         let n = ins.len();
@@ -939,7 +933,7 @@ pub fn abi1(f: &mut Fn, t: &Target) {
                         arg_start -= 1;
                     }
                     let call_seq = &ins[arg_start..=call_idx];
-                    selcall(f, call_seq, &mut buf, &mut il, &typs, t.apple);
+                    selcall(f, call_seq, &mut buf, &mut il, typs, t.apple);
                     idx = arg_start;
                 }
                 Op::Vastart => {

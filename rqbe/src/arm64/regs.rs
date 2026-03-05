@@ -131,13 +131,19 @@ pub static ARM64_RCLOB: &[i32] = &[
 ];
 
 // GP argument registers for AAPCS64.
-pub static GP_REG: [i32; 8] = [
-    R0 as i32, R1 as i32, R2 as i32, R3 as i32, R4 as i32, R5 as i32, R6 as i32, R7 as i32,
+// 12 entries (like C QBE) — only the first 8 are valid; extra padding
+// prevents out-of-bounds when typclass speculatively fills c.reg before
+// the caller checks register availability.
+pub static GP_REG: [i32; 12] = [
+    R0 as i32, R1 as i32, R2 as i32, R3 as i32, R4 as i32, R5 as i32, R6 as i32, R7 as i32, 0, 0,
+    0, 0,
 ];
 
 // FP argument registers for AAPCS64.
-pub static FP_REG: [i32; 8] = [
-    V0 as i32, V1 as i32, V2 as i32, V3 as i32, V4 as i32, V5 as i32, V6 as i32, V7 as i32,
+// 12 entries (like C QBE) — only the first 8 are valid; extra padding.
+pub static FP_REG: [i32; 12] = [
+    V0 as i32, V1 as i32, V2 as i32, V3 as i32, V4 as i32, V5 as i32, V6 as i32, V7 as i32, 0, 0,
+    0, 0,
 ];
 
 // ---------------------------------------------------------------------------

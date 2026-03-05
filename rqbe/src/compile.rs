@@ -1,6 +1,6 @@
 use std::fmt;
 
-use crate::ir::{Fn, Target};
+use crate::ir::{Fn, Target, Typ};
 use crate::parse::{self, ParseResult};
 use crate::{alias, arm64, cfg, copy, emit, fold, live, load, mem, regalloc, simpl, spill, ssa};
 
@@ -33,13 +33,12 @@ pub fn compile(input: &str, target: &Target) -> Result<String, Error> {
 
     // Parse input into types, data blocks, and functions.
     let ParseResult {
-        types: _types,
+        types,
         data,
         functions,
     } = parse::parse(input);
 
     // Emit data segments.
-    let fp_stash = emit::FPStash::new();
     for data_group in &data {
         let mut dat_state = emit::DatState::new();
         for dat in data_group {
@@ -49,11 +48,11 @@ pub fn compile(input: &str, target: &Target) -> Result<String, Error> {
 
     // Process each function through the compilation pipeline.
     for mut f in functions {
-        compile_fn(&mut f, target, &mut out);
+        compile_fn(&mut f, target, &types, &mut out);
     }
 
-    // Emit final assembly trailer.
-    emit::emitfin(&fp_stash, target, &mut out);
+    // Emit floating-point constant pool (accumulated via thread-local stash in isel).
+    emit::with_fp_stash(|stash| emit::emitfin(stash, target, &mut out));
 
     Ok(out)
 }
@@ -67,46 +66,68 @@ pub fn compile(input: &str, target: &Target) -> Result<String, Error> {
 ///   simpl → fillpreds → filluse → isel → fillrpo → filllive → fillloop →
 ///   fillcost → spill → rega → fillrpo → simpljmp → fillpreds → fillrpo →
 ///   link blocks → emitfn
-fn compile_fn(f: &mut Fn, target: &Target, out: &mut String) {
+fn compile_fn(f: &mut Fn, target: &Target, typs: &[Typ], out: &mut String) {
+    macro_rules! dbglog {
+        ($($arg:tt)*) => {{
+            use std::io::Write;
+            if let Ok(mut dbg) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/rqbe_compile_debug.txt") {
+                writeln!(dbg, $($arg)*).ok();
+            }
+        }};
+    }
+    dbglog!("=== compile_fn start ===");
+
     // ABI lowering pass 0: classify parameters and returns.
+    dbglog!("abi0...");
     arm64::abi0(f, target);
 
     // Build CFG: RPO numbering, predecessor lists, use/def info.
+    dbglog!("fillrpo...");
     cfg::fillrpo(f);
+    dbglog!("fillpreds...");
     cfg::fillpreds(f);
+    dbglog!("filluse...");
     ssa::filluse(f);
 
     // Memory promotion: promote stack slots to temporaries.
+    dbglog!("promote...");
     mem::promote(f);
     ssa::filluse(f);
 
     // SSA construction.
+    dbglog!("ssa...");
     ssa::ssa(f);
     ssa::filluse(f);
     ssa::ssacheck(f);
 
     // Load optimization: compute alias info, then optimize loads.
+    dbglog!("loadopt...");
     alias::fillalias(f);
     load::loadopt(f);
     ssa::filluse(f);
 
     // Memory coalescing: recompute aliases, merge adjacent slots.
+    dbglog!("coalesce...");
     alias::fillalias(f);
     mem::coalesce(f);
     ssa::filluse(f);
     ssa::ssacheck(f);
 
     // Copy elimination.
+    dbglog!("copy...");
     copy::copy(f);
     ssa::filluse(f);
 
     // Constant folding.
+    dbglog!("fold...");
     fold::fold(f);
 
     // ABI lowering pass 1: lower ABI-specific operations.
-    arm64::abi1(f, target);
+    dbglog!("abi1...");
+    arm64::abi1(f, target, typs);
 
     // Simplification.
+    dbglog!("simpl...");
     simpl::simpl(f);
 
     // Rebuild CFG for instruction selection.
@@ -114,16 +135,23 @@ fn compile_fn(f: &mut Fn, target: &Target, out: &mut String) {
     ssa::filluse(f);
 
     // Instruction selection: lower IR ops to machine instructions.
+    dbglog!("isel...");
     arm64::isel(f, target);
 
     // Prepare for register allocation.
+    dbglog!("fillrpo2...");
     cfg::fillrpo(f);
+    dbglog!("filllive...");
     live::filllive(f, target);
+    dbglog!("fillloop...");
     cfg::fillloop(f);
+    dbglog!("fillcost...");
     spill::fillcost(f);
 
     // Spilling and register allocation.
+    dbglog!("spill...");
     spill::spill(f, target);
+    dbglog!("rega...");
     regalloc::rega(f, target);
 
     // Final CFG cleanup.
@@ -150,5 +178,7 @@ fn compile_fn(f: &mut Fn, target: &Target, out: &mut String) {
     }
 
     // Emit assembly for this function.
+    dbglog!("emitfn...");
     arm64::emitfn(f, target, out);
+    dbglog!("=== compile_fn done ===");
 }

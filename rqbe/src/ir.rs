@@ -1332,6 +1332,8 @@ pub struct Fn {
     pub name: String,
     /// Linkage info.
     pub lnk: Lnk,
+    /// Symbol name table (indexed by Sym.id).
+    pub strs: Vec<String>,
 }
 
 impl Default for Fn {
@@ -1351,6 +1353,7 @@ impl Default for Fn {
             dynalloc: false,
             name: String::new(),
             lnk: Lnk::default(),
+            strs: Vec::new(),
         }
     }
 }
@@ -1852,6 +1855,71 @@ pub fn cmpop(op: u16) -> u16 {
     } else {
         op
     }
+}
+
+// ---------------------------------------------------------------------------
+// Condition-code-index negation / swap (for emit and isel)
+// ---------------------------------------------------------------------------
+// These operate on condition code indices (0..N_CMP), matching C QBE's
+// cmptab-based cmpneg()/cmpop() in util.c.  The functions above (cmpneg,
+// cmpop) operate on Op discriminant values and are used by util.rs wrappers.
+
+/// Negate a condition code index (e.g., ieq↔ine, isge↔islt).
+/// Matches C QBE's `cmptab[c][0]`.
+pub fn cc_neg(c: u16) -> u16 {
+    /// [negation, swap] indexed by condition code (0..N_CMP).
+    static CMPTAB: [[u16; 2]; N_CMP] = [
+        // Integer: Cieq(0)..Ciult(9)
+        [1, 0], // 0  ieq  -> neg=ine(1),  swap=ieq(0)
+        [0, 1], // 1  ine  -> neg=ieq(0),  swap=ine(1)
+        [5, 4], // 2  isge -> neg=islt(5), swap=isle(4)
+        [4, 5], // 3  isgt -> neg=isle(4), swap=islt(5)
+        [3, 2], // 4  isle -> neg=isgt(3), swap=isge(2)
+        [2, 3], // 5  islt -> neg=isge(2), swap=isgt(3)
+        [9, 8], // 6  iuge -> neg=iult(9), swap=iule(8)
+        [8, 9], // 7  iugt -> neg=iule(8), swap=iult(9)
+        [7, 6], // 8  iule -> neg=iugt(7), swap=iuge(6)
+        [6, 7], // 9  iult -> neg=iuge(6), swap=iugt(7)
+        // Float: Cfeq(10)..Cfuo(17)
+        [15, 10], // 10 feq -> neg=fne(15), swap=feq(10)
+        [14, 13], // 11 fge -> neg=flt(14), swap=fle(13)
+        [13, 14], // 12 fgt -> neg=fle(13), swap=flt(14)
+        [12, 11], // 13 fle -> neg=fgt(12), swap=fge(11)
+        [11, 12], // 14 flt -> neg=fge(11), swap=fgt(12)
+        [10, 15], // 15 fne -> neg=feq(10), swap=fne(15)
+        [17, 16], // 16 fo  -> neg=fuo(17), swap=fo(16)
+        [16, 17], // 17 fuo -> neg=fo(16),  swap=fuo(17)
+    ];
+    debug_assert!((c as usize) < N_CMP, "cc_neg: index {c} out of range");
+    CMPTAB[c as usize][0]
+}
+
+/// Swap a condition code index's operand order (e.g., isgt↔islt).
+/// Matches C QBE's `cmptab[c][1]`.
+pub fn cc_swap(c: u16) -> u16 {
+    // Reuse the same table as cc_neg — column 1 is the swap.
+    static CMPTAB: [[u16; 2]; N_CMP] = [
+        [1, 0],
+        [0, 1],
+        [5, 4],
+        [4, 5],
+        [3, 2],
+        [2, 3],
+        [9, 8],
+        [8, 9],
+        [7, 6],
+        [6, 7],
+        [15, 10],
+        [14, 13],
+        [13, 14],
+        [12, 11],
+        [11, 12],
+        [10, 15],
+        [17, 16],
+        [16, 17],
+    ];
+    debug_assert!((c as usize) < N_CMP, "cc_swap: index {c} out of range");
+    CMPTAB[c as usize][1]
 }
 
 // ---------------------------------------------------------------------------

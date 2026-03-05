@@ -572,7 +572,14 @@ fn emitf(s: &str, i: &Ins, e: &mut E) {
                 }
                 '=' | '0' => {
                     let r = if c == '=' { i.to } else { i.arg[0] };
-                    assert!(isreg(r), "expected register, got {:?}", r);
+                    assert!(
+                        isreg(r),
+                        "expected register, got {:?} in op {:?} (to={:?} arg={:?})",
+                        r,
+                        i.op,
+                        i.to,
+                        i.arg
+                    );
                     let _ = write!(e.out, "{}", rname(r.val(), k));
                 }
                 '1' => {
@@ -632,7 +639,11 @@ fn emitf(s: &str, i: &Ins, e: &mut E) {
 // ---------------------------------------------------------------------------
 
 fn loadaddr(c: &Con, rn: &str, e: &mut E) {
-    let sym_name = format!("sym{}", c.sym.id); // simplified symbol lookup
+    let sym_name = if (c.sym.id as usize) < e.f.strs.len() {
+        e.f.strs[c.sym.id as usize].clone()
+    } else {
+        format!("sym{}", c.sym.id)
+    };
     let pfx = if sym_name.starts_with('"') {
         ""
     } else {
@@ -689,7 +700,9 @@ fn loadcon(c: &Con, r: u32, k: Cls, e: &mut E) {
     let mut n = c.bits.i();
 
     if c.typ == ConType::Addr {
-        loadaddr(c, &rn, e);
+        // adrp/add always require 64-bit (x) registers.
+        let xn = rname(r, Cls::Kl);
+        loadaddr(c, &xn, e);
         return;
     }
     assert_eq!(c.typ, ConType::Bits);
@@ -849,7 +862,11 @@ fn emitins_inner(i: &Ins, e: &mut E) {
             if let Ref::Con(cid) = i.arg[0] {
                 let c = &e.f.cons[cid.0 as usize];
                 if c.typ == ConType::Addr && c.sym.typ == SymType::Glo && c.bits.i() == 0 {
-                    let sym_name = format!("sym{}", c.sym.id);
+                    let sym_name = if (c.sym.id as usize) < e.f.strs.len() {
+                        e.f.strs[c.sym.id as usize].clone()
+                    } else {
+                        format!("sym{}", c.sym.id)
+                    };
                     let pfx = if sym_name.starts_with('"') {
                         ""
                     } else {
@@ -1099,28 +1116,29 @@ pub fn emitfn(f: &mut Fn, t: &Target, out: &mut String) {
                     panic!("unhandled jump {:?}", blk.jmp.typ);
                 }
 
-                let (s1, s2_blk) = (blk.s1, blk.s2);
+                let (mut s1, mut s2_blk) = (blk.s1, blk.s2);
                 let next_bid = if block_idx + 1 < nblk {
                     Some(rpo[block_idx + 1])
                 } else {
                     None
                 };
 
-                let (cc, target_bid) = if s2_blk == next_bid {
-                    // s2 is fallthrough, branch to s1 on condition
-                    // But we need to negate the condition since
-                    // the convention is: b.cc to s2, fallthrough to s1
-                    // Actually: In QBE, b.cc jumps to s2, fall to s1.
-                    // If s2 == next (link), swap: negate condition, branch to s2's "other".
-                    // Wait: looking at C code: if link == s2 { swap s1/s2 } else { c = cmpneg(c) }
-                    // Then b.c to s2, fall to s1 (via goto Jmp which checks s1 != link).
-                    (c, s2_blk)
+                // Following C QBE's emit.c logic:
+                // If s2 (false branch) is the next block (fallthrough),
+                // swap s1/s2 so we can fall through to the old s2.
+                // Otherwise, negate the condition code.
+                // Then branch to (possibly swapped) s2.
+                let cc = if s2_blk == next_bid {
+                    // Swap s1 and s2
+                    let tmp = s1;
+                    s1 = s2_blk;
+                    s2_blk = tmp;
+                    c
                 } else {
-                    let neg_c = cmpneg(c);
-                    (neg_c, s2_blk)
+                    cc_neg(c)
                 };
 
-                if let Some(tb) = target_bid {
+                if let Some(tb) = s2_blk {
                     let cond_str = CTOA.get(cc as usize).unwrap_or(&"??");
                     let _ = writeln!(
                         e.out,

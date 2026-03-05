@@ -584,6 +584,10 @@ struct Parser<'a> {
     nblk: u32,
     /// Debug file names.
     dbgfiles: Vec<String>,
+    /// Symbol name table (global across all functions).
+    sym_strs: Vec<String>,
+    /// Symbol name dedup map.
+    sym_map: HashMap<String, u32>,
 }
 
 impl<'a> Parser<'a> {
@@ -600,6 +604,8 @@ impl<'a> Parser<'a> {
             rcls: K0,
             nblk: 0,
             dbgfiles: Vec::new(),
+            sym_strs: Vec::new(),
+            sym_map: HashMap::new(),
         }
     }
 
@@ -665,13 +671,16 @@ impl<'a> Parser<'a> {
         newcon(&c, &mut self.curf)
     }
 
-    /// Simple string interner for global symbol names. Uses con pool indirectly.
-    /// We store the name directly in the Sym.id field using a local interner.
-    fn intern_sym(&self, _name: &str) -> u32 {
-        // For the parser we just use a sequential id. The actual symbol
-        // resolution happens at a higher level. We store 0 and will put
-        // the name in the Con's sym field.
-        0
+    /// Intern a global symbol name. Returns an id that can be used to look up
+    /// the name in `Fn.strs`.
+    fn intern_sym(&mut self, name: &str) -> u32 {
+        if let Some(&id) = self.sym_map.get(name) {
+            return id;
+        }
+        let id = self.sym_strs.len() as u32;
+        self.sym_strs.push(name.to_owned());
+        self.sym_map.insert(name.to_owned(), id);
+        id
     }
 
     /// Find type by name among parsed types, searching backwards.
@@ -1353,7 +1362,10 @@ impl<'a> Parser<'a> {
                 Tok::Th => (FieldType::Fh, 2, 1),
                 Tok::Tb => (FieldType::Fb, 1, 0),
                 Tok::Ttyp => {
-                    let idx = self.findtyp(self.typs.len() - 1);
+                    // Use len() not len()-1: the current type being parsed
+                    // hasn't been pushed yet (unlike C where ntyp is pre-incremented),
+                    // so len() already excludes it.
+                    let idx = self.findtyp(self.typs.len());
                     let ty1 = &self.typs[idx];
                     let s = ty1.size;
                     let a = ty1.align;
@@ -1363,7 +1375,7 @@ impl<'a> Parser<'a> {
             };
 
             let typ_len = if ftype == FieldType::FTyp {
-                let idx = self.findtyp(self.typs.len() - 1);
+                let idx = self.findtyp(self.typs.len());
                 idx as u32
             } else {
                 s as u32
@@ -1700,6 +1712,8 @@ impl<'a> Parser<'a> {
                 }
                 Tok::Tfunc => {
                     self.parsefn(lnk);
+                    // Copy the global symbol table into the function.
+                    self.curf.strs = self.sym_strs.clone();
                     fns.push(self.curf.clone());
                 }
                 Tok::Tdata => {

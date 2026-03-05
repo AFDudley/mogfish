@@ -45,8 +45,11 @@ pub fn filluse(f: &mut Fn) {
     }
 
     // Iterate blocks in storage order (rpo may not be filled yet).
+    // IMPORTANT: We store the storage index (blk_idx) in Use.bid and Tmp.bid,
+    // NOT the RPO number (blk.id). All consumers index f.blks[u.bid as usize]
+    // directly, so they need the storage index.
     for blk_idx in 0..f.blks.len() {
-        let blk_id = f.blks[blk_idx].id;
+        let bid = blk_idx as u32; // storage index, not RPO number
 
         // --- Phi nodes ---
         for phi_idx in 0..f.blks[blk_idx].phi.len() {
@@ -54,7 +57,7 @@ pub fn filluse(f: &mut Fn) {
             let pcls = f.blks[blk_idx].phi[phi_idx].cls;
             if let Ref::Tmp(tid) = to {
                 let tp = tid.0 as usize;
-                f.tmps[tp].bid = blk_id;
+                f.tmps[tp].bid = bid;
                 f.tmps[tp].ndef += 1;
                 f.tmps[tp].cls = pcls;
 
@@ -67,13 +70,7 @@ pub fn filluse(f: &mut Fn) {
                     let arg = f.blks[blk_idx].phi[phi_idx].args[a];
                     if let Ref::Tmp(atid) = arg {
                         let t = atid.0;
-                        adduse(
-                            f,
-                            t,
-                            UseType::Phi,
-                            blk_id,
-                            UseDetail::PhiIdx(phi_idx as u32),
-                        );
+                        adduse(f, t, UseType::Phi, bid, UseDetail::PhiIdx(phi_idx as u32));
                         let t_cls = phicls(t as usize, &mut f.tmps);
                         if t_cls != tp_cls {
                             f.tmps[t_cls].phi = tp_cls as i32;
@@ -108,6 +105,7 @@ pub fn filluse(f: &mut Fn) {
                         let off = op as u16 - Op::Extsb as u16;
                         w = width_from_offset(off);
                     }
+
                     // If width is Wsw or Wuw and class is Kw, use WFull.
                     if (w == Width::Wsw || w == Width::Wuw) && icls == Cls::Kw {
                         w = Width::WFull;
@@ -115,7 +113,7 @@ pub fn filluse(f: &mut Fn) {
 
                     f.tmps[t].width = w;
                     f.tmps[t].def = Some(ins_idx);
-                    f.tmps[t].bid = blk_id;
+                    f.tmps[t].bid = bid;
                     f.tmps[t].ndef += 1;
                     f.tmps[t].cls = icls;
                 }
@@ -123,20 +121,14 @@ pub fn filluse(f: &mut Fn) {
             for m in 0..2 {
                 if let Ref::Tmp(tid) = ins.arg[m] {
                     let t = tid.0;
-                    adduse(
-                        f,
-                        t,
-                        UseType::Ins,
-                        blk_id,
-                        UseDetail::InsIdx(ins_idx as u32),
-                    );
+                    adduse(f, t, UseType::Ins, bid, UseDetail::InsIdx(ins_idx as u32));
                 }
             }
         }
 
         // --- Jump ---
         if let Ref::Tmp(tid) = f.blks[blk_idx].jmp.arg {
-            adduse(f, tid.0, UseType::Jmp, blk_id, UseDetail::Jmp);
+            adduse(f, tid.0, UseType::Jmp, bid, UseDetail::Jmp);
         }
     }
 }
@@ -195,8 +187,8 @@ fn phiins(f: &mut Fn) {
                     break;
                 }
             }
-            let start_id = f.blks[f.start.0 as usize].id;
-            if ok || defb == start_id {
+            let start_idx = f.start.0 as u32;
+            if ok || defb == start_idx {
                 continue;
             }
         }
@@ -281,8 +273,9 @@ fn phiins(f: &mut Fn) {
                 };
                 f.blks[a_idx].phi.push(phi);
 
-                if !defs.has(a_id.0) && !u.has(a_id.0) {
-                    u.set(a_id.0);
+                let a_rpoid = f.blks[a_idx].id;
+                if !defs.has(a_rpoid) && !u.has(a_rpoid) {
+                    u.set(a_rpoid);
                     blist.push(a_idx);
                 }
             }

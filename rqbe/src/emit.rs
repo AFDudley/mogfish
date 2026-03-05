@@ -46,14 +46,23 @@ impl Default for FPStash {
     }
 }
 
+thread_local! {
+    static FP_STASH: std::cell::RefCell<FPStash> = std::cell::RefCell::new(FPStash::new());
+}
+
 /// Free-standing convenience wrapper matching the C signature.  Uses a
 /// thread-local stash so that callers that cannot thread state through can
 /// still use it (mirrors the C global `stash`).
 pub fn stashbits(bits: &[u8]) -> usize {
-    thread_local! {
-        static STASH: std::cell::RefCell<FPStash> = std::cell::RefCell::new(FPStash::new());
-    }
-    STASH.with(|s| s.borrow_mut().stash(bits))
+    FP_STASH.with(|s| s.borrow_mut().stash(bits))
+}
+
+/// Access the thread-local FP stash for finalization.
+pub fn with_fp_stash<F, R>(f: F) -> R
+where
+    F: FnOnce(&FPStash) -> R,
+{
+    FP_STASH.with(|s| f(&s.borrow()))
 }
 
 // ---------------------------------------------------------------------------
@@ -65,11 +74,19 @@ pub fn stashbits(bits: &[u8]) -> usize {
 pub struct DatState {
     /// Accumulated zero bytes.  `-1` means "already committed as .data".
     zero: i64,
+    /// Name from the DatItem::Start item, persisted for later items.
+    name: String,
+    /// Linkage from the DatItem::Start item.
+    lnk: Option<Lnk>,
 }
 
 impl DatState {
     pub fn new() -> Self {
-        Self { zero: 0 }
+        Self {
+            zero: 0,
+            name: String::new(),
+            lnk: None,
+        }
     }
 }
 
@@ -172,18 +189,18 @@ pub fn emitfnlnk_target(name: &str, lnk: &Lnk, target: &Target, out: &mut String
 pub fn emitdat(dat: &Dat, state: &mut DatState, target: Option<&Target>, out: &mut String) {
     let is_apple = target.map_or(false, |t| t.apple);
     let pfx = if is_apple { "_" } else { "" };
-    let lnk = dat.lnk.as_ref();
-    let name = dat.name.as_deref().unwrap_or("");
 
     match &dat.item {
         DatItem::Start => {
             state.zero = 0;
+            state.name = dat.name.clone().unwrap_or_default();
+            state.lnk = dat.lnk.clone();
         }
         DatItem::End => {
             if state.zero != -1 {
                 // Entire definition was zero — emit as BSS.
-                if let Some(l) = lnk {
-                    emitlnk(name, l, Sec::Bss, target, out);
+                if let Some(l) = &state.lnk {
+                    emitlnk(&state.name, l, Sec::Bss, target, out);
                 }
                 let _ = writeln!(out, "\t.fill {},1,0", state.zero);
             }
@@ -196,14 +213,26 @@ pub fn emitdat(dat: &Dat, state: &mut DatState, target: Option<&Target>, out: &m
             }
         }
         DatItem::Str(s) => {
-            commit_data_section(name, lnk, &mut state.zero, target, out);
-            let _ = writeln!(out, "\t.ascii {s}");
+            commit_data_section(
+                &state.name.clone(),
+                state.lnk.as_ref(),
+                &mut state.zero,
+                target,
+                out,
+            );
+            let _ = writeln!(out, "\t.ascii \"{s}\"");
         }
         DatItem::Ref {
             name: ref_name,
             off,
         } => {
-            commit_data_section(name, lnk, &mut state.zero, target, out);
+            commit_data_section(
+                &state.name.clone(),
+                state.lnk.as_ref(),
+                &mut state.zero,
+                target,
+                out,
+            );
             let rp = if ref_name.starts_with('"') { "" } else { pfx };
             if *off != 0 {
                 let _ = writeln!(out, "\t.quad {rp}{ref_name}{off:+}");
@@ -212,15 +241,33 @@ pub fn emitdat(dat: &Dat, state: &mut DatState, target: Option<&Target>, out: &m
             }
         }
         DatItem::FltS(f) => {
-            commit_data_section(name, lnk, &mut state.zero, target, out);
+            commit_data_section(
+                &state.name.clone(),
+                state.lnk.as_ref(),
+                &mut state.zero,
+                target,
+                out,
+            );
             let _ = writeln!(out, "\t.int {}", f.to_bits() as i32);
         }
         DatItem::FltD(f) => {
-            commit_data_section(name, lnk, &mut state.zero, target, out);
+            commit_data_section(
+                &state.name.clone(),
+                state.lnk.as_ref(),
+                &mut state.zero,
+                target,
+                out,
+            );
             let _ = writeln!(out, "\t.quad {}", f.to_bits() as i64);
         }
         item => {
-            commit_data_section(name, lnk, &mut state.zero, target, out);
+            commit_data_section(
+                &state.name.clone(),
+                state.lnk.as_ref(),
+                &mut state.zero,
+                target,
+                out,
+            );
             let (directive, val) = match item {
                 DatItem::Byte(v) => ("\t.byte", *v),
                 DatItem::Half(v) => ("\t.short", *v),
@@ -302,7 +349,7 @@ pub fn macho_emitfin(stash: &FPStash, out: &mut String) {
         "__TEXT,__literal8,8byte_literals",
         ".abort \"unreachable\"",
     ];
-    emitfin_inner(stash, &sec, ".L", out);
+    emitfin_inner(stash, &sec, "L", out);
 }
 
 /// Emit stashed FP constants for ELF targets.
@@ -398,19 +445,19 @@ pub fn emitdbgloc(line: u32, col: u32, out: &mut String) {
 // ---------------------------------------------------------------------------
 
 /// Print a `Con` value in QBE IL syntax.
-fn printcon(c: &Con, _f: &Fn, out: &mut String) {
+fn printcon(c: &Con, f: &Fn, out: &mut String) {
     match c.typ {
         ConType::Undef => {}
         ConType::Addr => {
             if c.sym.typ == SymType::Thr {
                 let _ = write!(out, "thread ");
             }
-            // Resolve the symbol name from the function's string table.
-            // The Fn struct doesn't carry a global interner, so we store
-            // the name directly via the sym.id mapping.  For printing,
-            // we emit the sym id as a placeholder — callers with access
-            // to a string interner can substitute.
-            let _ = write!(out, "$sym{}", c.sym.id);
+            let sym_name = if (c.sym.id as usize) < f.strs.len() {
+                f.strs[c.sym.id as usize].as_str()
+            } else {
+                "???"
+            };
+            let _ = write!(out, "${sym_name}");
             if c.bits.i() != 0 {
                 let _ = write!(out, "{:+}", c.bits.i());
             }

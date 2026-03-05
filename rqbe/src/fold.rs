@@ -108,7 +108,8 @@ fn visitphi(
 ) {
     let mut v = LatVal::Top;
     for a in 0..p.narg() {
-        if !deadedge(p.blks[a].0 as usize, n, edge) {
+        let pred_rpo = f.blks[p.blks[a].0 as usize].id as usize;
+        if !deadedge(pred_rpo, n, edge) {
             v = latmerge(v, latval(p.args[a], val));
         }
     }
@@ -200,10 +201,10 @@ fn visitjmp(
 // Initialize an edge
 // ---------------------------------------------------------------------------
 
-fn initedge(s: Option<BlkId>) -> Edge {
+fn initedge(s: Option<BlkId>, f: &Fn) -> Edge {
     Edge {
         dest: match s {
-            Some(id) => id.0 as i32,
+            Some(id) => f.blks[id.0 as usize].id as i32,
             None => -1,
         },
         dead: true,
@@ -245,7 +246,7 @@ pub fn fold(f: &mut Fn) {
         let s1 = f.blks[bid.0 as usize].s1;
         let s2 = f.blks[bid.0 as usize].s2;
         f.blks[bid.0 as usize].visit = 0;
-        edge.push([initedge(s1), initedge(s2)]);
+        edge.push([initedge(s1, f), initedge(s2, f)]);
     }
 
     // Start edge: points to the start block (RPO index 0).
@@ -311,19 +312,13 @@ pub fn fold(f: &mut Fn) {
             }
             f.blks[bid.0 as usize].visit += 1;
         } else if let Some(u) = usewrk.pop() {
-            let n = u.bid as usize;
-            // Find the RPO index for this block id.
-            // u.bid is a block index (BlkId.0), and the block's id field
-            // stores its RPO index.
-            // Actually, in QBE, b->id IS the RPO number after fillrpo.
-            // So we look up rpo[n] to get the BlkId, but u.bid is the
-            // RPO index directly (since Tmp.bid = block's rpo index).
-            // Wait -- Use.bid stores the block id as set by filluse, which
-            // is the RPO number (b->id). So n = u.bid is the RPO index.
+            // u.bid is a storage index (BlkId.0). We need the RPO index
+            // for the edge array, which is stored in blk.id after fillrpo.
+            let bid = BlkId(u.bid);
+            let n = f.blks[bid.0 as usize].id as usize;
             if n >= nblk {
                 continue;
             }
-            let bid = f.rpo[n];
             if f.blks[bid.0 as usize].visit == 0 {
                 continue;
             }
@@ -406,7 +401,8 @@ pub fn fold(f: &mut Fn) {
             }
             // Rename constant args on live edges.
             for a in 0..p.narg() {
-                if !deadedge(p.blks[a].0 as usize, n, &edge) {
+                let pred_rpo = f.blks[p.blks[a].0 as usize].id as usize;
+                if !deadedge(pred_rpo, n, &edge) {
                     renref(&mut p.args[a], &val);
                 }
             }

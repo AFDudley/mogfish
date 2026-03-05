@@ -53,7 +53,13 @@ pub fn promote(f: &mut Fn) {
                     // Find the instruction from the use.
                     let use_blk = &f.blks[u.bid as usize];
                     let use_ins = match u.detail {
-                        crate::ir::UseDetail::InsIdx(idx) => &use_blk.ins[idx as usize],
+                        crate::ir::UseDetail::InsIdx(idx) => {
+                            if (idx as usize) >= use_blk.ins.len() {
+                                ok = false;
+                                break;
+                            }
+                            &use_blk.ins[idx as usize]
+                        }
                         _ => {
                             ok = false;
                             break;

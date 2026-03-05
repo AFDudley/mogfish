@@ -13,6 +13,21 @@ use crate::util::{self, InsBuffer};
 use super::regs::*;
 
 // ---------------------------------------------------------------------------
+// String interning into Fn.strs
+// ---------------------------------------------------------------------------
+
+/// Intern a string into the function's strs table, returning its index.
+/// If the string already exists, return the existing index.
+fn intern_str(s: &str, f: &mut Fn) -> u32 {
+    if let Some(pos) = f.strs.iter().position(|existing| existing == s) {
+        return pos as u32;
+    }
+    let id = f.strs.len() as u32;
+    f.strs.push(s.to_string());
+    id
+}
+
+// ---------------------------------------------------------------------------
 // Immediate classification
 // ---------------------------------------------------------------------------
 
@@ -148,15 +163,14 @@ fn fixarg(pr: &mut Ref, k: Cls, phi: bool, f: &mut Fn, buf: &mut InsBuffer, appl
                 let bits_bytes = c.bits.i().to_le_bytes();
                 let n = crate::emit::stashbits(&bits_bytes[..nbytes]);
                 let asloc = if apple { "L" } else { ".L" };
-                let _buf_name = format!("\"{asloc}fp{n}\"");
-                // Create a new constant for the address
+                let label = format!("\"{asloc}fp{n}\"");
+                // Intern the FP label name into f.strs
+                let sym_id = intern_str(&label, f);
                 let mut addr_con = Con::default();
                 addr_con.typ = ConType::Addr;
-                // We need to intern the string; for now use a simple ID
-                // In the actual codebase, this would go through the string interner
                 addr_con.sym = Sym {
                     typ: SymType::Glo,
-                    id: n as u32, // simplified
+                    id: sym_id,
                 };
                 let r2 = util::newtmp("isel", Cls::Kl, f);
                 let addr_ref = util::newcon(&addr_con, f);
@@ -279,7 +293,7 @@ fn sel(i: Ins, f: &mut Fn, buf: &mut InsBuffer, apple: bool) {
         let mut arg = i.arg;
         if selcmp(&mut arg, k, f, buf, apple) {
             // Swap: adjust the flag op using saved index
-            let swapped = cmpop(cc as u16);
+            let swapped = cc_swap(cc as u16);
             let new_flag_op =
                 unsafe { std::mem::transmute::<u16, Op>(Op::Flagieq as u16 + swapped) };
             buf.at_mut(flag_idx).op = new_flag_op;
@@ -313,10 +327,12 @@ fn sel(i: Ins, f: &mut Fn, buf: &mut InsBuffer, apple: bool) {
 /// Select jumps: fuse comparison+branch into conditional jumps.
 fn seljmp(bid: BlkId, f: &mut Fn, buf: &mut InsBuffer, apple: bool) {
     let jmp = f.blks[bid.0 as usize].jmp.typ;
-    if jmp == Jmp::Ret0 || jmp == Jmp::Jmp_ || jmp == Jmp::Hlt {
+    if jmp != Jmp::Jnz {
+        // Only Jnz needs instruction selection (fuse comparison+branch).
+        // All other types (Jmp_, Ret0, Retw, Retl, Rets, Retd, Hlt, Jxxx, etc.)
+        // are left as-is.
         return;
     }
-    assert_eq!(jmp, Jmp::Jnz);
 
     let r = f.blks[bid.0 as usize].jmp.arg;
     f.blks[bid.0 as usize].jmp.arg = Ref::R;
@@ -343,7 +359,11 @@ fn seljmp(bid: BlkId, f: &mut Fn, buf: &mut InsBuffer, apple: bool) {
                 let k = Cls::from_i8(ck as i8);
                 let mut arg = ins[idx].arg;
                 let swapped = selcmp(&mut arg, k, f, buf, apple);
-                let final_cc = if swapped { cmpop(cc as u16) } else { cc as u16 };
+                let final_cc = if swapped {
+                    cc_swap(cc as u16)
+                } else {
+                    cc as u16
+                };
                 let jmp_val = Jmp::Jfieq as u16 + final_cc;
                 f.blks[bid.0 as usize].jmp.typ =
                     unsafe { std::mem::transmute::<u16, Jmp>(jmp_val) };
