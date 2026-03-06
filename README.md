@@ -520,15 +520,13 @@ The core language is fully implemented and tested. ML operations are not languag
 
 ## Future Work
 
-### In-Process Assembler
+### Eliminating External Processes
 
-The QBE backend currently bottlenecks on the system assembler (`as`). For large programs, `rqbe` itself takes ~13ms but `as` takes ~59ms — 71% of backend time. Three options to eliminate this:
+The compiler frontend and `rqbe` backend both run in-process, but the pipeline still shells out to the system assembler (`as`) and linker (`cc`). For large programs these dominate compile time. Two options to eliminate them:
 
-1. **Minimal ARM64 assembler in Rust** (~3-4 weeks). Write a purpose-built assembler handling only the ~54 ARM64 instruction mnemonics `rqbe` actually emits, plus Mach-O object file output. ARM64's fixed 4-byte encoding makes this tractable. Expected: ~2-5ms for 7K lines of assembly, saving ~55ms.
+1. **Emit machine code directly from `rqbe`**. Replace `rqbe`'s text assembly emitters with binary ARM64 encoders, producing Mach-O `.o` files in-process. ARM64's fixed 4-byte encoding and the limited set of ~54 mnemonics `rqbe` actually uses make this tractable. Eliminates the text→parse→encode round-trip of `as` entirely.
 
-2. **Modify `rqbe` to emit machine code directly** (~2-3 weeks). Replace `rqbe`'s text emitters with binary encoders, emitting Mach-O `.o` files directly. Eliminates the text->parse->encode round-trip entirely. Cleanest long-term solution but requires deeper `rqbe` modifications.
-
-3. **Skip assembly, JIT to memory** (~2 weeks). For development/REPL use cases, encode ARM64 directly into an executable memory page and jump to it. No assembler or linker needed. Limited to same-machine execution.
+2. **JIT to memory**. For development/REPL use cases, encode ARM64 directly into an executable memory page and jump to it. No assembler or linker needed. Limited to same-machine execution.
 
 ## Architecture
 
