@@ -2,6 +2,7 @@
 
 A small, statically-typed, embeddable programming language. Has a pure-Rust toolchain: Rust compiler, Rust runtime (~6K lines), and an in-process [QBE](https://c9x.me/compile/) backend ([`rqbe`](rqbe/), a safe Rust rewrite). Think of it as a statically-typed Lua with async I/O and a capability model where the host controls all side effects.
 
+- **[Introductory Essay](https://gist.github.com/belisarius222/203ac5edbc3306c34bf0481f451d4003)** - Why we built Mog and where it's going.
 - **[Language Guide](docs/guide.md)** — Full tutorial from first program through async, modules, embedding, and plugins.
 - **[Showcase](showcase.mog)** — One file demonstrating every language feature (755 lines).
 - **[LLM Context](docs/context.md)** — Compact reference designed to fit in an LLM's context window.
