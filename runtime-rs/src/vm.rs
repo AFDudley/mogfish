@@ -1,6 +1,8 @@
 // Mog VM runtime — lifecycle, capabilities, value constructors/extractors, interrupt.
 
-use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicI64, Ordering};
+use std::sync::OnceLock;
+use std::time::Instant;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -629,7 +631,13 @@ pub extern "C" fn mog_interrupt_requested() -> i32 {
 // ---------------------------------------------------------------------------
 
 static TIMEOUT_ACTIVE: AtomicBool = AtomicBool::new(false);
-static TIMEOUT_MS: AtomicI32 = AtomicI32::new(0);
+static TIMEOUT_DEADLINE_NS: AtomicI64 = AtomicI64::new(-1);
+
+fn timeout_now_ns() -> u64 {
+    static TIMEOUT_EPOCH: OnceLock<Instant> = OnceLock::new();
+    let epoch = TIMEOUT_EPOCH.get_or_init(Instant::now);
+    epoch.elapsed().as_nanos() as u64
+}
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mog_arm_timeout(ms: i32) {
@@ -640,7 +648,8 @@ pub extern "C" fn mog_arm_timeout(ms: i32) {
     mog_cancel_timeout();
     mog_clear_interrupt();
 
-    TIMEOUT_MS.store(ms, Ordering::Relaxed);
+    let deadline = (timeout_now_ns() + (ms as u64) * 1_000_000) as i64;
+    TIMEOUT_DEADLINE_NS.store(deadline, Ordering::Relaxed);
     TIMEOUT_ACTIVE.store(true, Ordering::Relaxed);
 
     std::thread::spawn(move || {
@@ -650,7 +659,9 @@ pub extern "C" fn mog_arm_timeout(ms: i32) {
             std::thread::sleep(std::time::Duration::from_millis(chunk as u64));
             remaining -= chunk;
         }
-        if TIMEOUT_ACTIVE.load(Ordering::Relaxed) {
+        if TIMEOUT_ACTIVE.load(Ordering::Relaxed)
+            && TIMEOUT_DEADLINE_NS.load(Ordering::Relaxed) == deadline
+        {
             mog_request_interrupt();
         }
     });
@@ -659,6 +670,27 @@ pub extern "C" fn mog_arm_timeout(ms: i32) {
 #[unsafe(no_mangle)]
 pub extern "C" fn mog_cancel_timeout() {
     TIMEOUT_ACTIVE.store(false, Ordering::Relaxed);
+    TIMEOUT_DEADLINE_NS.store(-1, Ordering::Relaxed);
+}
+
+pub(crate) fn mog_timeout_remaining_ns() -> Option<u64> {
+    if !TIMEOUT_ACTIVE.load(Ordering::Relaxed) {
+        return None;
+    }
+
+    let deadline = TIMEOUT_DEADLINE_NS.load(Ordering::Relaxed);
+    if deadline <= 0 {
+        return None;
+    }
+
+    let now = timeout_now_ns() as i64;
+    if now >= deadline {
+        mog_request_interrupt();
+        return Some(0);
+    }
+
+    let remaining = deadline - now;
+    u64::try_from(remaining).ok()
 }
 
 // ---------------------------------------------------------------------------

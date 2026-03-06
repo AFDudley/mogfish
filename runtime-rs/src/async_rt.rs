@@ -20,16 +20,6 @@ fn now_ns() -> u64 {
     epoch.elapsed().as_nanos() as u64
 }
 
-fn sleep_ns(ns: u64) {
-    let ts = libc::timespec {
-        tv_sec: (ns / 1_000_000_000) as libc::time_t,
-        tv_nsec: (ns % 1_000_000_000) as libc::c_long,
-    };
-    unsafe {
-        libc::nanosleep(&ts, ptr::null_mut());
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Future states
 // ---------------------------------------------------------------------------
@@ -624,7 +614,12 @@ pub extern "C" fn mog_loop_run(loop_ptr: *mut u8) {
                 }
             }
 
-            // 3. Check if anything remains
+            // 2b. Stop promptly when host timeout is requested.
+            if crate::vm::mog_interrupt_requested() != 0 {
+                break;
+            }
+
+            // 3. Exit when all known work is complete.
             if el.timers.is_null()
                 && el.ready_head.is_null()
                 && el.watchers.is_null()
@@ -633,8 +628,8 @@ pub extern "C" fn mog_loop_run(loop_ptr: *mut u8) {
                 break;
             }
 
-            // 4. Use select() to wait for fd events and/or timer deadlines
-            if el.ready_head.is_null() && (!el.timers.is_null() || !el.watchers.is_null()) {
+            // 3b. Wait for fd events, timer deadlines, or host timeout.
+            if el.ready_head.is_null() {
                 let mut read_fds: libc::fd_set = std::mem::zeroed();
                 let mut write_fds: libc::fd_set = std::mem::zeroed();
                 libc::FD_ZERO(&mut read_fds);
@@ -656,36 +651,39 @@ pub extern "C" fn mog_loop_run(loop_ptr: *mut u8) {
                     w = (*w).next;
                 }
 
-                // Calculate timeout from next timer
+                // Calculate timeout from next timer.
+                let mut wait_ns: Option<u64> = None;
+
                 let mut tv = libc::timeval {
                     tv_sec: 0,
                     tv_usec: 0,
                 };
-                let mut use_tv = false;
 
                 if !el.timers.is_null() {
                     let tnow = now_ns();
+                    let mut timer_wait_ns = 0;
                     if (*el.timers).deadline_ns > tnow {
-                        let wait_ns = (*el.timers).deadline_ns - tnow;
-                        tv.tv_sec = (wait_ns / 1_000_000_000) as libc::time_t;
-                        tv.tv_usec = ((wait_ns % 1_000_000_000) / 1000) as libc::suseconds_t;
+                        timer_wait_ns = (*el.timers).deadline_ns - tnow;
                     }
                     // else: deadline already passed, tv stays 0,0 (immediate)
-                    use_tv = true;
-                } else if el.watchers.is_null() || max_fd < 0 {
-                    // Nothing to wait on — poll with 10ms
-                    tv.tv_sec = 0;
-                    tv.tv_usec = 10_000;
-                    use_tv = true;
+                    wait_ns = Some(timer_wait_ns);
                 }
-                // else: no timers but have fd watchers — block indefinitely (tv_ptr = null)
+
+                if let Some(timeout_ns) = crate::vm::mog_timeout_remaining_ns() {
+                    wait_ns = Some(match wait_ns {
+                        Some(timer_wait_ns) => timer_wait_ns.min(timeout_ns),
+                        None => timeout_ns,
+                    });
+                }
+
+                let mut tv_ptr = ptr::null_mut();
+                if let Some(wait_ns) = wait_ns {
+                    tv.tv_sec = (wait_ns / 1_000_000_000) as libc::time_t;
+                    tv.tv_usec = ((wait_ns % 1_000_000_000) / 1000) as libc::suseconds_t;
+                    tv_ptr = &mut tv as *mut libc::timeval;
+                }
 
                 if max_fd >= 0 {
-                    let tv_ptr = if use_tv {
-                        &mut tv as *mut libc::timeval
-                    } else {
-                        ptr::null_mut()
-                    };
                     let nready = libc::select(
                         max_fd + 1,
                         &mut read_fds,
@@ -762,11 +760,16 @@ pub extern "C" fn mog_loop_run(loop_ptr: *mut u8) {
                             w = next;
                         }
                     }
-                } else if use_tv {
-                    // No fd watchers, just sleep for the timeout
-                    let sleep_total = tv.tv_sec as u64 * 1_000_000_000 + tv.tv_usec as u64 * 1000;
-                    if sleep_total > 0 {
-                        sleep_ns(sleep_total);
+                } else {
+                    let nready = libc::select(
+                        0,
+                        ptr::null_mut(),
+                        ptr::null_mut(),
+                        ptr::null_mut(),
+                        tv_ptr,
+                    );
+                    if nready == -1 {
+                        crate::vm::mog_request_interrupt();
                     }
                 }
             }
@@ -776,6 +779,7 @@ pub extern "C" fn mog_loop_run(loop_ptr: *mut u8) {
                 && el.timers.is_null()
                 && el.ready_head.is_null()
                 && el.watchers.is_null()
+                && el.pending_count <= 0
             {
                 break;
             }
