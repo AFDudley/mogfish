@@ -214,6 +214,11 @@ module.exports = async function (eleventyConfig) {
     return guideToc;
   });
 
+  eleventyConfig.addGlobalData("introductionHtml", async () => {
+    const { guideHtml } = await getIntroductionArtifacts();
+    return guideHtml;
+  });
+
   eleventyConfig.addPassthroughCopy("site/styles.css");
   eleventyConfig.addPassthroughCopy("site/CNAME");
   eleventyConfig.addPassthroughCopy("site/assets");
