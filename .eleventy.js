@@ -42,6 +42,15 @@ function makeUniqueSlug(base, seen) {
   return count === 0 ? baseSlug : `${baseSlug}-${count + 1}`;
 }
 
+function stripFrontMatter(markdown) {
+  const normalized = String(markdown || "");
+  const match = normalized.match(/^---\n[\s\S]*?\n---\n?/);
+  if (!match || match.index !== 0) {
+    return normalized;
+  }
+  return normalized.slice(match[0].length);
+}
+
 function buildDocumentArtifacts(markdown, mdRenderer) {
   const tokens = mdRenderer.parse(markdown, {});
   const used = new Map();
@@ -181,7 +190,8 @@ module.exports = async function (eleventyConfig) {
       return introductionArtifacts;
     }
 
-    const introductionMarkdown = await fs.readFile(introductionPath, "utf8");
+    const rawIntroductionMarkdown = await fs.readFile(introductionPath, "utf8");
+    const introductionMarkdown = stripFrontMatter(rawIntroductionMarkdown);
     introductionArtifacts = buildDocumentArtifacts(introductionMarkdown, md);
     introductionMtime = stats.mtimeMs;
     return introductionArtifacts;
@@ -197,11 +207,6 @@ module.exports = async function (eleventyConfig) {
   eleventyConfig.addGlobalData("guideToc", async () => {
     const { guideToc } = await getGuideArtifacts();
     return guideToc;
-  });
-
-  eleventyConfig.addGlobalData("introductionHtml", async () => {
-    const { guideHtml } = await getIntroductionArtifacts();
-    return guideHtml;
   });
 
   eleventyConfig.addGlobalData("introductionToc", async () => {
