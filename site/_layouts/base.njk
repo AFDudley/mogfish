@@ -143,6 +143,28 @@
 
         onScroll();
         window.addEventListener("scroll", onScroll, { passive: true });
+
+        if (tocContainer) {
+          tocContainer.addEventListener(
+            "wheel",
+            (event) => {
+              if (tocContainer.scrollHeight <= tocContainer.clientHeight) {
+                return;
+              }
+
+              const delta = event.deltaY;
+              if (Math.abs(delta) < Math.abs(event.deltaX)) {
+                return;
+              }
+
+              const maxScroll = tocContainer.scrollHeight - tocContainer.clientHeight;
+              if ((delta < 0 && tocContainer.scrollTop <= 0) || (delta > 0 && tocContainer.scrollTop >= maxScroll)) {
+                event.preventDefault();
+              }
+            },
+            { passive: false }
+          );
+        }
       })();
     </script>
   </body>
