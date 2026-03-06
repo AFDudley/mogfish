@@ -8,7 +8,7 @@
 
 # Chapter 1: Introduction
 
-Mog is a small, statically-typed, embeddable programming language. It compiles to native code through LLVM (and a lightweight QBE backend), runs inside a host application, and is designed for one job: giving LLM agents and automation scripts a language that is safe to execute, fast enough for real work, and small enough for a model to hold in its context window.
+Mog is a small, statically-typed, embeddable programming language. It compiles to native code through the in-process QBE backend (`rqbe`), runs inside a host application, and is designed for one job: giving LLM agents and automation scripts a language that is safe to execute, fast enough for real work, and small enough for a model to hold in its context window.
 
 If you have written code in Rust, Go, or TypeScript, Mog's syntax will feel familiar. If you have embedded Lua or Wren in an application, Mog's execution model will make sense immediately. The difference is that Mog is statically typed, compiles to native code, and enforces a capability-based security model that makes it safe to run untrusted code.
 
@@ -69,7 +69,7 @@ If you have used other embeddable languages, here is how Mog differs:
 
 **Wren** is a class-based, dynamically-typed embeddable language with a clean syntax. Like Mog, it is designed for embedding in host applications. The key differences are that Mog is statically typed, compiles ahead of time, has no classes or inheritance, and provides a formal capability model for security. Wren's object-oriented design makes it natural for game scripting; Mog's functional style with explicit capabilities makes it natural for agent scripting and ML workflows.
 
-**Rhai** is a scripting language for Rust applications, dynamically typed, interpreted. Mog targets a similar embedding scenario but takes a different approach: static types catch errors before execution, LLVM compilation produces native-speed code, and the capability system provides security guarantees that a dynamic language cannot offer at compile time.
+**Rhai** is a scripting language for Rust applications, dynamically typed, interpreted. Mog targets a similar embedding scenario but takes a different approach: static types catch errors before execution, QBE-backed compilation produces native-speed code, and the capability system provides security guarantees that a dynamic language cannot offer at compile time.
 
 The common thread: Mog is the statically-typed, ahead-of-time-compiled option in the embeddable language space. It pays for this with a compilation step, but gains type safety, native performance, and a security model that is enforced before the script runs.
 
@@ -8942,7 +8942,7 @@ for i in 0..50000 {
 }
 ```
 
-The capacity is fixed at creation. `soa Particle[10000]` allocates space for exactly 10,000 elements. This is a deliberate tradeoff — fixed size enables the compiler to lay out memory optimally and elide bounds checks in release builds.
+The capacity is fixed at creation. `soa Star[50000]` allocates space for exactly 50,000 elements. This is a deliberate tradeoff — fixed size enables the compiler to lay out memory optimally and elide bounds checks in release builds.
 
 ## Compilation Backend: rqbe
 
@@ -8975,7 +8975,7 @@ From the host side, two C functions control interrupts:
 void mog_request_interrupt(void);
 
 // Arm an automatic timeout — interrupt fires after ms milliseconds
-int mog_arm_timeout(int ms);
+void mog_arm_timeout(int ms);
 ```
 
 `mog_request_interrupt()` sets the flag directly. The script will stop at the next loop back-edge — usually within microseconds for any loop-heavy code.
