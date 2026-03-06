@@ -809,7 +809,7 @@ unsafe fn gc_sweep() {
                 // Unreachable — free it.
                 *cursor = (*block).next;
                 let sz = (*block).size as usize;
-                HEAP_SIZE -= sz;
+                HEAP_SIZE = HEAP_SIZE.saturating_sub(sz);
 
                 if is_large_block(block) {
                     let lb = block as *mut LargeBlock;
@@ -1071,7 +1071,15 @@ pub extern "C" fn gc_set_threshold(t: usize) {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Mutex, MutexGuard};
+
     use super::*;
+
+    static TEST_GC_MUTEX: Mutex<()> = Mutex::new(());
+
+    fn lock_gc_runtime() -> MutexGuard<'static, ()> {
+        TEST_GC_MUTEX.lock().unwrap()
+    }
 
     fn configure_limits(max_memory: usize, initial_memory: usize) {
         gc_set_memory_limits(max_memory, initial_memory);
@@ -1079,8 +1087,13 @@ mod tests {
         crate::vm::mog_clear_interrupt();
     }
 
+    fn tracked_bytes() -> usize {
+        unsafe { HEAP_SIZE.saturating_add(GC_EXTERNAL_BYTES) }
+    }
+
     #[test]
     fn gc_collects_unreachable_memory_before_hitting_limit() {
+        let _lock = lock_gc_runtime();
         configure_limits(200 * 1024, 180 * 1024);
 
         let first = gc_alloc(140_000);
@@ -1106,7 +1119,167 @@ mod tests {
     }
 
     #[test]
+    fn gc_storm_stays_under_limit_when_everything_is_garbage() {
+        let _lock = lock_gc_runtime();
+        configure_limits(512 * 1024, 256 * 1024);
+
+        for _ in 0..128 {
+            let scratch = gc_alloc(4 * 1024);
+            assert!(
+                !scratch.is_null(),
+                "storm allocation should succeed while below hard limit"
+            );
+            gc_collect();
+            assert_eq!(
+                gc_heap_size(),
+                0,
+                "garbage-only allocations should be reclaimed after collection"
+            );
+            assert_eq!(crate::vm::mog_interrupt_requested(), 0);
+        }
+
+        assert!(tracked_bytes() <= 512 * 1024);
+        gc_shutdown();
+    }
+
+    #[test]
+    fn gc_interrupt_is_limited_to_max_and_host_can_reclaim_by_scoping_roots() {
+        let _lock = lock_gc_runtime();
+        configure_limits(64 * 1024, 64 * 1024);
+        gc_push_frame();
+
+        let mut roots: [*mut u8; 32] = [std::ptr::null_mut(); 32];
+        for i in 0..32 {
+            let p = gc_alloc(2 * 1024);
+            assert!(!p.is_null(), "rooted scratch allocation should succeed");
+            roots[i] = p;
+            gc_add_root(&mut roots[i]);
+        }
+
+        let blocked = gc_alloc(40 * 1024);
+        assert!(
+            blocked.is_null(),
+            "allocation should fail when live rooted memory is at hard limit"
+        );
+        assert_eq!(
+            crate::vm::mog_interrupt_requested(),
+            1,
+            "OOM should raise the interrupt flag instead of aborting the process"
+        );
+        assert!(tracked_bytes() <= 64 * 1024);
+
+        gc_pop_frame();
+        crate::vm::mog_clear_interrupt();
+        gc_collect();
+        assert_eq!(gc_heap_size(), 0, "scoping rooted allocations should release tracked heap bytes");
+
+        let recovered = gc_alloc(32 * 1024);
+        assert!(
+            !recovered.is_null(),
+            "host recovery path should allow further allocations after reclaim"
+        );
+        assert_eq!(crate::vm::mog_interrupt_requested(), 0);
+        gc_shutdown();
+    }
+
+    #[test]
+    fn gc_external_alloc_tracks_and_releases_memory_with_host_visible_budget() {
+        let _lock = lock_gc_runtime();
+        configure_limits(200 * 1024, 180 * 1024);
+
+        let external_a = gc_external_alloc(120 * 1024);
+        let external_b = gc_external_alloc(64 * 1024);
+        assert!(!external_a.is_null(), "first external allocation should succeed");
+        assert!(!external_b.is_null(), "second external allocation should succeed");
+
+        let blocked = gc_external_alloc(32 * 1024);
+        assert!(
+            blocked.is_null(),
+            "external overrun should fail at hard limit"
+        );
+        assert_eq!(
+            crate::vm::mog_interrupt_requested(),
+            1,
+            "hard limit should convert OOM into an interrupt"
+        );
+        assert!(tracked_bytes() <= 200 * 1024);
+
+        gc_external_free(external_a);
+        gc_external_free(external_b);
+        crate::vm::mog_clear_interrupt();
+        let recovered = gc_external_alloc(150 * 1024);
+        assert!(
+            !recovered.is_null(),
+            "reclaiming external buffers should restore budget for subsequent allocations"
+        );
+
+        gc_external_free(recovered);
+        gc_shutdown();
+    }
+
+    #[test]
+    fn gc_internal_and_external_limits_share_the_same_budget() {
+        let _lock = lock_gc_runtime();
+        configure_limits(192 * 1024, 120 * 1024);
+
+        let external = gc_external_alloc(96 * 1024);
+        assert!(
+            !external.is_null(),
+            "external allocation should occupy shared budget before internal allocation"
+        );
+        gc_push_frame();
+
+        let mut keeps: [*mut u8; 12] = [std::ptr::null_mut(); 12];
+        for i in 0..12 {
+            let ptr = gc_alloc(2 * 1024);
+            assert!(
+                !ptr.is_null(),
+                "rooted internal allocation should allocate while near limit"
+            );
+            keeps[i] = ptr;
+            gc_add_root(&mut keeps[i]);
+        }
+
+        let blocked = gc_alloc(80 * 1024);
+        assert!(
+            blocked.is_null(),
+            "internal allocation should fail once shared budget is full"
+        );
+        assert_eq!(
+            crate::vm::mog_interrupt_requested(),
+            1,
+            "hard limit should convert OOM into an interrupt"
+        );
+        assert!(tracked_bytes() <= 192 * 1024);
+
+        gc_pop_frame();
+        gc_external_free(external);
+        crate::vm::mog_clear_interrupt();
+        gc_collect();
+        let recovered = gc_alloc(32 * 1024);
+        assert!(
+            !recovered.is_null(),
+            "heap should recover after shared budget is freed"
+        );
+        gc_shutdown();
+    }
+
+    #[test]
+    fn gc_zero_limit_remains_unlimited() {
+        let _lock = lock_gc_runtime();
+        configure_limits(0, 0);
+        let chunk = gc_alloc(768 * 1024);
+        assert!(
+            !chunk.is_null(),
+            "zero max memory should disable hard memory limits"
+        );
+        assert_eq!(crate::vm::mog_interrupt_requested(), 0);
+        gc_shutdown();
+    }
+
+    #[test]
     fn gc_reports_interrupt_when_reclaim_fails_and_limit_is_exceeded() {
+        let _lock = lock_gc_runtime();
         configure_limits(200 * 1024, 180 * 1024);
 
         gc_push_frame();
@@ -1142,6 +1315,7 @@ mod tests {
 
     #[test]
     fn gc_external_allocates_share_the_same_hard_limit() {
+        let _lock = lock_gc_runtime();
         configure_limits(200 * 1024, 180 * 1024);
 
         let first = gc_external_alloc(120 * 1024);
@@ -1169,6 +1343,7 @@ mod tests {
 
     #[test]
     fn gc_initial_memory_is_clamped_to_max_when_too_large() {
+        let _lock = lock_gc_runtime();
         configure_limits(100 * 1024, 10 * 1024 * 1024);
         let clamped_initial = unsafe { std::ptr::read_volatile(std::ptr::addr_of!(GC_INITIAL_MEMORY)) };
         assert_eq!(
@@ -1176,6 +1351,61 @@ mod tests {
             100 * 1024,
             "initial memory should be clamped when greater than max"
         );
+        gc_shutdown();
+    }
+
+    #[test]
+    fn gc_limits_prevent_huge_single_request_without_overwriting_heap_accounting() {
+        let _lock = lock_gc_runtime();
+        configure_limits(128 * 1024, 64 * 1024);
+
+        let blocked = gc_alloc(usize::MAX);
+        assert!(blocked.is_null(), "oversized allocation should fail cleanly");
+        assert_eq!(
+            tracked_bytes(),
+            0,
+            "rejecting oversized internal allocation should not change arena accounting"
+        );
+        assert_eq!(
+            crate::vm::mog_interrupt_requested(),
+            1,
+            "hard limit enforcement should surface as an interrupt"
+        );
+
+        let blocked_external = gc_external_alloc(usize::MAX);
+        assert!(
+            blocked_external.is_null(),
+            "oversized host-visible allocation should fail cleanly"
+        );
+        assert_eq!(tracked_bytes(), 0);
+        assert_eq!(crate::vm::mog_interrupt_requested(), 1);
+
+        gc_shutdown();
+    }
+
+    #[test]
+    fn gc_collects_on_soft_limit_pressure_from_live_allocations() {
+        let _lock = lock_gc_runtime();
+        configure_limits(512 * 1024, 256 * 1024);
+
+        let first = gc_alloc(260_000);
+        assert!(!first.is_null(), "initial allocation should succeed");
+
+        let second = gc_alloc(190_000);
+        assert!(
+            !second.is_null(),
+            "allocation just past soft threshold should still succeed after forced collection"
+        );
+        assert_eq!(
+            crate::vm::mog_interrupt_requested(),
+            0,
+            "soft-threshold collection should avoid OOM"
+        );
+        assert!(
+            gc_heap_size() <= 190_000,
+            "allocation under soft-limit pressure should have reclaimed unreachable memory"
+        );
+
         gc_shutdown();
     }
 }
