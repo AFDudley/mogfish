@@ -2,6 +2,10 @@
 
 A small, statically-typed, embeddable language for ML workflows and LLM agent scripting. Has a pure-Rust toolchain: Rust compiler, Rust runtime (~6K lines), and an in-process QBE backend (`rqbe`, a safe Rust rewrite of QBE). A legacy TypeScript compiler also exists. Think of it as a statically-typed Lua with tensors, async I/O, and a capability model where the host provides all I/O and ML operations.
 
+- **[Language Guide](docs/guide.md)** — Full tutorial from first program through async, modules, embedding, and plugins.
+- **[Showcase](showcase.mog)** — One file demonstrating every language feature (755 lines).
+- **[LLM Context](docs/context.md)** — Compact reference designed to fit in an LLM's context window.
+
 ## Why Mog
 
 Most ML work today lives in Python scripts that are difficult to sandbox, expensive to deploy, and opaque to the LLM agents that increasingly need to write and execute code. Mog exists to give those agents — and the humans supervising them — a language that is small enough to fit entirely in a model's context window, safe enough to run untrusted code without fear, and expressive enough to do real ML work without dropping into a general-purpose language.
@@ -56,14 +60,17 @@ cargo build --release --manifest-path runtime-rs/Cargo.toml
 # Compile to native binary
 mogc program.mog -o program
 
-# Compile with optimization
+# Compile with optimization (-O0, -O1, -O2)
 mogc program.mog -o program -O1
 
 # Emit QBE IR (for inspection)
 mogc program.mog --emit-ir
 
 # Compile as a plugin (.dylib/.so shared library)
-mogc program.mog --plugin mylib -o mylib.dylib
+mogc program.mog --plugin mylib --plugin-version 1.0.0 -o mylib.dylib
+
+# Link additional Rust or C files (host capabilities, etc.)
+mogc program.mog --link host.rs -o program
 ```
 
 **Requirements:** A C compiler (`cc`) must be on `$PATH` for linking. The QBE backend (`rqbe`) is built in-process — no external `qbe` binary is needed. The Rust runtime (`runtime-rs/`) is the default; the legacy C runtime (`runtime/`) is no longer required.
@@ -120,7 +127,7 @@ bun run src/index.ts program.mog
 # TypeScript tests (1,338 tests across 30 files)
 bun test
 
-# Rust compiler tests (1,145+ tests across 11 files)
+# Rust compiler tests (1,146+ tests across 13 files)
 cargo test --manifest-path compiler/Cargo.toml
 
 # rqbe backend tests (186 tests)
@@ -576,7 +583,7 @@ compiler/
   include/
     mog_compiler.h    C header for embedding
   tests/
-    test_*.rs         1,145+ tests across 11 files
+    test_*.rs         1,146+ tests across 13 files
 
 rqbe/                 In-process QBE backend (safe Rust, ~15K lines, 186 tests)
 ```
@@ -704,7 +711,9 @@ MogPlugin *safe = mog_load_plugin_sandboxed("./untrusted.dylib", vm, allowed);
 mog_unload_plugin(plugin);
 ```
 
-Plugins use `pub fn` to export functions. Non-pub functions have internal linkage. See `examples/plugins/` for plugin examples, and `examples/plugins/async_plugin_demo/` for a complete example of runtime compilation + dynamic loading (`dlopen`) + async plugin function calls from a Rust host.
+Plugin binaries are integrity-checked using BLAKE3 hashes. `compile_plugin()` returns the hash alongside the compiled path, and `mog_load_plugin_verified()` re-computes the hash before loading — rejecting tampered files before any code executes.
+
+Plugins use `pub fn` to export functions. Non-pub functions have internal linkage. See `examples/plugins/` for plugin examples, and `examples/plugins/async_plugin_demo/` for a complete example of runtime compilation + dynamic loading (`dlopen`) + BLAKE3 verification + async plugin function calls from a Rust host.
 
 ## License
 
