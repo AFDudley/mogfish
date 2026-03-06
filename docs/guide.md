@@ -5,131 +5,7 @@
 ---
 
 
-
-# Chapter 1: Introduction
-
-Mog is a small, statically-typed, embeddable programming language. It compiles to native code through the in-process QBE backend (`rqbe`), runs inside a host application, and is designed for one job: giving LLM agents and automation scripts a language that is safe to execute, fast enough for real work, and small enough for a model to hold in its context window.
-
-If you have written code in Rust, Go, or TypeScript, Mog's syntax will feel familiar. If you have embedded Lua or Wren in an application, Mog's execution model will make sense immediately. The difference is that Mog is statically typed, compiles to native code, and enforces a capability-based security model that makes it safe to run untrusted code.
-
-## What Mog Is For
-
-Mog targets a specific set of use cases:
-
-- **LLM agent tool-use scripts.** An agent generates a Mog script, the host compiles and runs it in a sandbox, and the script can only access capabilities the host explicitly grants. No container needed.
-- **Plugin and extension scripting.** A host application exposes functionality through capabilities, and third-party scripts extend the application without being able to crash it or access the filesystem behind its back.
-- **ML workflow orchestration.** Tensors are a built-in data type with hardware-relevant dtypes like `f16` and `bf16`. The host provides ML operations (matmul, activations, autograd) through capabilities, so the script describes *what* to compute and the host decides *where* to run it.
-- **Short automation scripts.** Configuration, data transformation, and glue code where you want static types and native speed without the weight of a general-purpose language.
-
-Here is what a small Mog program looks like — an agent tool script that searches an API and filters results:
-
-```mog
-requires http, log;
-
-async fn search(query: string) -> Result<string[]> {
-  response := await http.get("/api/search?q={query}")?;
-  results := parse_results(response);
-  log.info("found {results.len} results for '{query}'");
-  return ok(results);
-}
-
-async fn main() -> int {
-  results := await search("machine learning")?;
-  top := results.filter(fn(r) { r.score > 0.8 });
-  for r in top {
-    print("{r.title}: {r.url}");
-  }
-  return 0;
-}
-```
-
-The `requires http, log` declaration tells the host what capabilities this script needs. If the host doesn't provide them, the script won't run. The script itself has no way to access the network or filesystem directly — everything goes through the host.
-
-## Design Philosophy
-
-Mog is built around six principles. They explain why the language looks the way it does, and why many features you might expect are deliberately absent.
-
-**1. Small surface area.** The entire language should fit in an LLM's context window. Every feature must justify its existence. When in doubt, leave it out. This is why Mog has no macros, no generics (beyond tensor dtype parameterization), no inheritance, and no operator overloading. A smaller language is easier to learn, easier to generate, and easier to reason about.
-
-**2. Predictable semantics.** No implicit coercion surprises, no operator precedence puzzles, no hidden control flow. Code reads top-to-bottom, left-to-right. When you see an expression like `a + b`, the types of `a` and `b` determine exactly what happens — there is no overloading, no implicit conversion from string to int, no surprising promotion rules.
-
-**3. Familiar syntax.** Curly braces, `fn`, `->`, `:=`. A blend of Rust, Go, and TypeScript that LLMs already generate fluently. Mog introduces no novel syntax without strong justification. If you can read any of those languages, you can read Mog.
-
-**4. Safe by default.** Garbage collected, bounds-checked, no null, no raw pointers. A Mog script cannot crash the host process, corrupt memory, or access resources outside its sandbox. The runtime includes a mark-and-sweep garbage collector, array bounds checking, and cooperative interrupt polling at loop back-edges so the host can terminate runaway scripts.
-
-**5. Host provides I/O.** The language has no built-in file, network, or system access. All side effects go through capabilities explicitly granted by the embedding host. This is the foundation of Mog's security model — a script can only do what the host lets it do.
-
-**6. Tensors as data, ML as capability.** The language provides n-dimensional arrays (tensors) as a built-in data structure with element-level read/write and shape manipulation. All ML operations — matmul, activations, loss functions, autograd — are provided by the host through capabilities. The language gives you the data structure; the host gives you the compute. This means the host can route tensor operations to CPU, GPU, or a remote accelerator without the script needing to know.
-
-## How Mog Compares to Other Embeddable Languages
-
-If you have used other embeddable languages, here is how Mog differs:
-
-**Lua** is dynamically typed, interpreted (or JIT-compiled via LuaJIT), and has a minimal core. Mog shares Lua's philosophy of being small and embeddable, but adds static types, compiles to native code ahead of time, and enforces capability-based security rather than relying on environment sandboxing. Lua's flexibility is a strength for interactive scripting; Mog trades that flexibility for compile-time safety and native performance.
-
-**Wren** is a class-based, dynamically-typed embeddable language with a clean syntax. Like Mog, it is designed for embedding in host applications. The key differences are that Mog is statically typed, compiles ahead of time, has no classes or inheritance, and provides a formal capability model for security. Wren's object-oriented design makes it natural for game scripting; Mog's functional style with explicit capabilities makes it natural for agent scripting and ML workflows.
-
-**Rhai** is a scripting language for Rust applications, dynamically typed, interpreted. Mog targets a similar embedding scenario but takes a different approach: static types catch errors before execution, QBE-backed compilation produces native-speed code, and the capability system provides security guarantees that a dynamic language cannot offer at compile time.
-
-The common thread: Mog is the statically-typed, ahead-of-time-compiled option in the embeddable language space. It pays for this with a compilation step, but gains type safety, native performance, and a security model that is enforced before the script runs.
-
-## The Capability-Based Security Model
-
-Security in Mog is not an afterthought bolted onto the runtime — it is a structural property of the language. A Mog script declares the capabilities it needs at the top of the file:
-
-```mog
-requires fs, log;        // these must be provided or the script won't run
-optional env;             // this is used if available, ignored if not
-```
-
-The host application decides which capabilities to grant:
-
-```c
-MogVM *vm = mog_vm_new();
-mog_register_capability(vm, "fs", fs_functions, 6);
-mog_register_capability(vm, "log", log_functions, 4);
-```
-
-If a script declares `requires http` but the host doesn't provide the `http` capability, the script is rejected before it executes. There is no way for the script to discover or access capabilities that weren't explicitly registered.
-
-This means you can look at a Mog script's `requires` declarations and know exactly what it can do. A script that says `requires log` can write log messages and nothing else — it cannot read files, make network requests, or access the filesystem. This property is enforced by the compiler and runtime together, not by convention.
-
-Standard capabilities that hosts commonly provide include:
-
-| Capability | What it provides |
-|---|---|
-| `fs` | File read/write/exists/remove |
-| `http` | HTTP requests |
-| `log` | Structured logging (info, warn, error, debug) |
-| `env` | Environment info, timestamps, random numbers |
-| `process` | Sleep, environment variables, working directory |
-| `ml` | ML operations (matmul, activations, autograd) |
-| `model` | LLM inference |
-| `db` | Database queries |
-
-A host can also define custom capabilities — there is nothing special about the standard ones. They are just conventions.
-
-## What Mog Is Not
-
-Mog is deliberately not many things. Each omission keeps the language small, the security model tractable, and the compilation fast:
-
-- **Not a systems language.** No raw pointers, no manual memory management, no POSIX syscalls, no direct OS access.
-- **Not standalone.** Mog is always embedded in a host application. There is no standard library for file I/O or networking — the host provides everything.
-- **Not general-purpose.** Mog is for scripts, plugins, and orchestration. It is not designed for building web servers, operating systems, or databases.
-- **Not object-oriented.** No classes, no inheritance, no methods on types. Structs hold data; functions operate on data. Higher-order functions and closures provide the abstraction mechanisms.
-- **No macros or metaprogramming.** The language you see is the language that runs. No code generation, no compile-time evaluation, no syntax extensions.
-- **No generics.** Beyond tensor dtype parameterization (`tensor<f32>`, `tensor<f16>`), there are no generic types or functions. This keeps the type system simple and the compiler small.
-- **No exceptions with stack unwinding.** Error handling uses `Result<T>` with explicit propagation via `?`. Errors are values, not control flow.
-- **No threads or locks.** Concurrency is cooperative via `async`/`await`, with the host managing the event loop.
-
-If you need any of these features, Mog is probably not the right language for your use case — and that's fine. Mog is designed to do a few things well rather than everything adequately.
-
-## What's Ahead
-
-The rest of this guide walks through the language feature by feature, with runnable examples at every step. Chapter 2 starts with the simplest possible program and builds up from there. By the end, you will be able to write Mog scripts that use the full language: variables, functions, closures, structs, arrays, maps, error handling, async operations, tensors, and host capabilities.
-
-Let's write some code.
-# Chapter 2: Your First Mog Program
+# Chapter 1: Your First Mog Program
 
 This chapter walks through the basics of writing and running Mog code. By the end, you will understand how a Mog program is structured, how to print output, how to write comments, and how to define and call functions.
 
@@ -173,7 +49,7 @@ There is also a convenience script that compiles, links, and runs in a single st
 
 In production, Mog programs run embedded inside a host application. The host compiles the script, registers capabilities, and invokes the compiled code through a C API. But for learning the language, the standalone compilation path is all you need.
 
-There is a third compilation mode: **plugins**. You can compile a `.mog` file into a shared library (`.dylib` on macOS, `.so` on Linux) instead of a standalone executable. The host loads the library at runtime with `dlopen`, queries what functions are available, and calls them by name. Functions marked `pub` in the source become exported symbols; everything else gets internal linkage and is invisible to the loader. This is the right path when you want pre-compiled, hot-swappable modules — the host never sees the source code, just a binary it can load and unload. See Chapter 15 for the full plugin API.
+There is a third compilation mode: **plugins**. You can compile a `.mog` file into a shared library (`.dylib` on macOS, `.so` on Linux) instead of a standalone executable. The host loads the library at runtime with `dlopen`, queries what functions are available, and calls them by name. Functions marked `pub` in the source become exported symbols; everything else gets internal linkage and is invisible to the loader. This is the right path when you want pre-compiled, hot-swappable modules — the host never sees the source code, just a binary it can load and unload. See Chapter 14 for the full plugin API.
 
 The compiler uses rqbe, a safe Rust implementation of the QBE backend, as its code generation engine. rqbe runs entirely in-process — no external tools are needed beyond the system assembler and linker. It compiles fast and produces correct native code for ARM64 and x86.
 
@@ -506,10 +382,25 @@ Sum of squares(1..100) = 338350
 
 This example shows `for-in` loops over both ranges (`1..n + 1`) and arrays (`[5, 10, 20, 100]`). We will cover control flow in detail in a later chapter — for now, the syntax should be readable.
 
+## What Mog Is Not
+
+Mog is deliberately not many things. Each omission keeps the language small, the security model tractable, and the compilation fast:
+
+- **Not a systems language.** No raw pointers, no manual memory management, no POSIX syscalls, no direct OS access.
+- **Not standalone.** Mog is always embedded in a host application. There is no standard library for file I/O or networking — the host provides everything.
+- **Not general-purpose.** Mog is for scripts, plugins, and orchestration. It is not designed for building web servers, operating systems, or databases.
+- **Not object-oriented.** No classes, no inheritance, no methods on types. Structs hold data; functions operate on data. Higher-order functions and closures provide the abstraction mechanisms.
+- **No macros or metaprogramming.** The language you see is the language that runs. No code generation, no compile-time evaluation, no syntax extensions.
+- **No generics.** Beyond tensor dtype parameterization (`tensor<f32>`, `tensor<f16>`), there are no generic types or functions. This keeps the type system simple and the compiler small.
+- **No exceptions with stack unwinding.** Error handling uses `Result<T>` with explicit propagation via `?`. Errors are values, not control flow.
+- **No threads or locks.** Concurrency is cooperative via `async`/`await`, with the host managing the event loop.
+
+If you need any of these features, Mog is probably not the right language for your use case — and that's fine. Mog is designed to do a few things well rather than everything adequately.
+
 ## What's Next
 
-You now know how to write, compile, and run a Mog program. You have seen the basic program structure, comments, print functions, and how to define and call functions with typed parameters. Chapter 3 covers variables and bindings in depth — how `:=` and `=` work, type annotations, and scoping rules.
-# Chapter 3: Variables and Bindings
+You now know how to write, compile, and run a Mog program. You have seen the basic program structure, comments, print functions, and how to define and call functions with typed parameters. Chapter 2 covers variables and bindings in depth — how `:=` and `=` work, type annotations, and scoping rules.
+# Chapter 2: Variables and Bindings
 
 Mog keeps variable declaration simple: there are no `var`, `let`, or `const` keywords. You create bindings with `:=` and reassign them with `=`. That's it.
 
@@ -823,7 +714,7 @@ fn main() {
 | `x := "hi";` | Shadow — create a new binding with the same name |
 
 The rule is simple: `:=` introduces, `=` updates. When in doubt, use `:=` for new things and `=` for changing existing things.
-# Chapter 4: Types and Operators
+# Chapter 3: Types and Operators
 
 Mog is statically typed with no implicit coercion. Every value has a known type at compile time, and the compiler will reject any operation that mixes types without an explicit conversion.
 
@@ -910,7 +801,7 @@ The commonly used float types:
 | `float` | 64-bit (double) | Default for all float math |
 | `f32` | 32-bit (single) | Tensor element type, GPU work |
 
-> Mog also supports `f16` and `bf16` (bfloat16) for ML tensor element types — see Chapter 16 for details on tensors. For scalar code, always use `float`.
+> Mog also supports `f16` and `bf16` (bfloat16) for ML tensor element types — see Chapter 15 for details on tensors. For scalar code, always use `float`.
 
 ```mog
 // Scalar code: just use float
@@ -1049,7 +940,7 @@ s3 := str(true);       // "true"
 s4 := str(false);      // "false"
 ```
 
-To parse strings into numbers, use `int_from_string()` and `parse_float()`. These return `Result` because parsing can fail (see Chapter 11 for full coverage of error handling):
+To parse strings into numbers, use `int_from_string()` and `parse_float()`. These return `Result` because parsing can fail (see Chapter 10 for full coverage of error handling):
 
 ```mog
 result := int_from_string("42");
@@ -1436,7 +1327,7 @@ Mog's type system is small and strict:
 - **Operators require matching types.** Both sides of `+`, `*`, `==`, etc. must be the same type.
 - **Booleans are booleans.** No truthy/falsy — use explicit comparisons.
 - **Operators are flat — no precedence.** Different operators cannot mix without parentheses, and non-associative operators cannot chain. This eliminates an entire class of bugs.
-# Chapter 5: Control Flow
+# Chapter 4: Control Flow
 
 Mog's control flow is familiar if you've used any C-family language: `if`/`else`, `while`, `for`, `break`, `continue`, and `match`. No surprises — but a few details matter, like braces being required, `if` working as an expression, and `match` handling Result and Optional patterns.
 
@@ -2364,7 +2255,7 @@ fn main() -> int {
 
 ### Matching on Result and Optional
 
-Mog's `Result<T>` and Optional (`?T`) types have variants that `match` can destructure. This is a brief preview — Chapter 11 covers error handling in depth.
+Mog's `Result<T>` and Optional (`?T`) types have variants that `match` can destructure. This is a brief preview — Chapter 10 covers error handling in depth.
 
 **Result patterns:** `ok(value)` and `err(message)`:
 
@@ -2657,7 +2548,7 @@ fn main() -> int {
 | Continue | `continue;` | Skips to next iteration |
 | Match | `match val { pat => expr, }` | Comma-separated arms, `_` wildcard |
 | Match expression | `x := match val { ... };` | Returns value from matched arm |
-# Chapter 6: Functions
+# Chapter 5: Functions
 
 Functions are the primary building blocks of any Mog program. They group reusable logic behind a name, accept typed parameters, and can return values. This chapter covers everything from basic declarations to recursion and the built-in functions that ship with every Mog program.
 
@@ -2749,7 +2640,7 @@ fn print_if_positive(n: int) {
 
 ## Parameters and Return Types
 
-Parameters are declared with `name: Type` syntax. Every parameter must have a type annotation — Mog does not infer parameter types (see Chapter 3 for why type annotations are required on function signatures).
+Parameters are declared with `name: Type` syntax. Every parameter must have a type annotation — Mog does not infer parameter types (see Chapter 2 for why type annotations are required on function signatures).
 
 ```mog
 fn format_price(amount: float, currency: string) -> string {
@@ -2960,7 +2851,7 @@ fn main() -> int {
 }
 ```
 
-> **Tip:** For deep or performance-sensitive recursion, consider rewriting with a loop (see Chapter 5). The recursive Fibonacci above is O(2^n) — the iterative version is O(n):
+> **Tip:** For deep or performance-sensitive recursion, consider rewriting with a loop (see Chapter 4). The recursive Fibonacci above is O(2^n) — the iterative version is O(n):
 
 ```mog
 // Iterative fibonacci — much faster for large n
@@ -3010,7 +2901,7 @@ Mog provides a set of math functions as builtins. No imports required. All math 
 | `min(a, b)` | Smaller of two values |
 | `max(a, b)` | Larger of two values |
 
-> All math builtins take and return `float`. If you have an `int`, cast it first with `as float` (see Chapter 4).
+> All math builtins take and return `float`. If you have an `int`, cast it first with `as float` (see Chapter 3).
 
 Examples:
 
@@ -3128,7 +3019,7 @@ empty: [string] = [];
 println(len(empty));    // 0
 ```
 
-**`int_from_string(s)`** — Parse a string into an int. Returns `Result<int>` because the parse can fail (see Chapter 11 for full coverage of Result):
+**`int_from_string(s)`** — Parse a string into an int. Returns `Result<int>` because the parse can fail (see Chapter 10 for full coverage of Result):
 
 ```mog
 result := int_from_string("42");
@@ -3202,7 +3093,7 @@ fn main() -> int {
 | Named call | `f(x: 42, y: 10)` | Named args can be in any order |
 | Mixed call | `f(42, y: 10)` | Positional before named |
 | Recursion | `fn f(n: int) { f(n-1); }` | No guaranteed tail-call optimization |
-# Chapter 7: Closures and Higher-Order Functions
+# Chapter 6: Closures and Higher-Order Functions
 
 In the previous chapter, functions were always named and declared at the top level. Mog also supports **closures** — anonymous functions that can be created inline, stored in variables, passed as arguments, and returned from other functions. When combined with higher-order functions (functions that accept or return other functions), closures unlock powerful and concise patterns for working with data.
 
@@ -3396,11 +3287,11 @@ to_km := make_multiplier(1.60934);
 print(to_km(10.0));  // 16.0934
 ```
 
-This factory pattern is useful for creating families of related functions from a single template. You will see it again in Chapter 9 when we build constructor functions for structs.
+This factory pattern is useful for creating families of related functions from a single template. You will see it again in Chapter 8 when we build constructor functions for structs.
 
 ## Closures with Array Methods
 
-Mog arrays have built-in methods — `filter`, `map`, and `sort` — that accept closures. These methods return new arrays; they do not modify the original. See Chapter 10 for the full set of collection operations.
+Mog arrays have built-in methods — `filter`, `map`, and `sort` — that accept closures. These methods return new arrays; they do not modify the original. See Chapter 9 for the full set of collection operations.
 
 ### filter
 
@@ -3516,7 +3407,7 @@ print(result);  // [100, 64, 36, 16, 4]
 | Sort an array | `arr.sort(fn(a: T, b: T) -> bool { ... })` |
 
 Closures capture by value, are first-class values, and combine naturally with array methods for concise data processing. In the next chapter, we will look at Mog's string type in detail.
-# Chapter 8: Strings
+# Chapter 7: Strings
 
 Strings are one of the most frequently used types in any language. Mog strings are immutable, UTF-8 encoded, and garbage-collected — you create them, pass them around, and the runtime handles the rest. This chapter covers everything from basic literals and escape sequences to interpolation, methods, and parsing.
 
@@ -3998,7 +3889,7 @@ fn main() -> int {
 
 Mog provides two sets of parsing functions with different error-handling strategies.
 
-**Safe parsing** — `int_from_string()` and `float_from_string()` return a `Result` type that you can match on for error handling (see Chapter 11 for details on Result types):
+**Safe parsing** — `int_from_string()` and `float_from_string()` return a `Result` type that you can match on for error handling (see Chapter 10 for details on Result types):
 
 ```mog
 fn main() -> int {
@@ -4190,8 +4081,8 @@ fn main() -> int {
 | Parse float (simple) | `parse_float("3.14")` | `float` |
 | Equality | `a == b`, `a != b` | `bool` |
 
-Strings are straightforward in Mog — double-quoted, immutable, UTF-8, and garbage-collected. For error handling with `int_from_string` and `float_from_string`, see Chapter 11 on Result types.
-# Chapter 9: Structs
+Strings are straightforward in Mog — double-quoted, immutable, UTF-8, and garbage-collected. For error handling with `int_from_string` and `float_from_string`, see Chapter 10 on Result types.
+# Chapter 8: Structs
 
 Structs are Mog's way of grouping related data under a single name. They are simple named product types with typed fields — no methods, no inheritance, no interfaces. You define the shape, construct instances, and pass them around. Functions that operate on structs live outside the struct as standalone functions.
 
@@ -4341,7 +4232,7 @@ fn main() {
 }
 ```
 
-> This is different from closures, which capture variables by value (see Chapter 7). Structs are always passed by reference — there is no copy-on-pass.
+> This is different from closures, which capture variables by value (see Chapter 6). Structs are always passed by reference — there is no copy-on-pass.
 
 Functions can read struct fields without modifying them:
 
@@ -4444,7 +4335,7 @@ fn main() {
 }
 ```
 
-This pattern gives you the flexibility of default values while keeping construction explicit. See Chapter 7 for how closures can create factory functions that return configured behavior.
+This pattern gives you the flexibility of default values while keeping construction explicit. See Chapter 6 for how closures can create factory functions that return configured behavior.
 
 ## Nested Structs
 
@@ -4560,7 +4451,7 @@ fn main() {
 }
 ```
 
-See Chapter 10 for the full set of array and map operations.
+See Chapter 9 for the full set of array and map operations.
 
 ## Practical Examples
 
@@ -4657,7 +4548,7 @@ fn main() {
 | Nested field access | `instance.field.subfield` |
 
 Structs are heap-allocated and passed by reference. There are no methods — use standalone functions that take the struct as a parameter. Keep structs simple: they hold data, functions provide behavior.
-# Chapter 10: Collections
+# Chapter 9: Collections
 
 Mog provides three collection types: arrays for ordered sequences, maps for key-value lookup, and SoA (Struct of Arrays) for cache-friendly columnar storage. Together they cover the vast majority of data organization needs.
 
@@ -4763,7 +4654,7 @@ fn main() -> int {
 
 ### Iteration
 
-Use `for` to iterate over elements. The two-variable form gives you the index (see Chapter 5):
+Use `for` to iterate over elements. The two-variable form gives you the index (see Chapter 4):
 
 ```mog
 fn main() -> int {
@@ -5226,7 +5117,7 @@ Use regular arrays of structs when:
 
 ### Construction
 
-Define a regular struct (see Chapter 9), then create an SoA container with `soa StructName[capacity]`:
+Define a regular struct (see Chapter 8), then create an SoA container with `soa StructName[capacity]`:
 
 ```mog
 struct Particle {
@@ -5508,7 +5399,7 @@ fn main() -> int {
 **Map methods:** `.len()`, `.keys()`, `.values()`, `.has()`, `.delete()`
 
 Arrays are the default choice. Use maps when you need key-based lookup. Use SoA when you have many elements and need to iterate over individual fields efficiently — the syntax stays familiar while the memory layout optimizes for your access pattern.
-# Chapter 11: Error Handling
+# Chapter 10: Error Handling
 
 Mog has no exceptions. There is no `throw`, no invisible stack unwinding, no `try`/`finally` cleanup semantics. When a function can fail, it says so in its return type, and the caller decides what to do. Errors are values — you create them, return them, match on them, and propagate them with the same tools you use for everything else.
 
@@ -5561,7 +5452,7 @@ fn load_settings(path: string) -> Result<{string: string}> {
 }
 ```
 
-Use `match` to handle both cases (see Chapter 5 for match syntax):
+Use `match` to handle both cases (see Chapter 4 for match syntax):
 
 ```mog
 fn main() -> int {
@@ -6019,7 +5910,7 @@ fn get_port(config: {string: string}) -> int {
 
 ### Error Message Formatting
 
-Build descriptive error messages with string interpolation (see Chapter 4):
+Build descriptive error messages with string interpolation (see Chapter 3):
 
 ```mog
 fn load_user_record(id: int) -> Result<User> {
@@ -6116,7 +6007,7 @@ fn fetch_and_parse(url: string) -> Result<Config> {
 | `try { ... } catch(e) { ... }` | Handle propagated errors locally |
 
 Mog's error handling is explicit and local. You always know which functions can fail by looking at their return type, and you always know where errors are handled by following the `?` operators and `match` arms. There are no hidden control flow paths — what you read is what runs.
-# Chapter 12: Async Programming
+# Chapter 11: Async Programming
 
 Mog uses `async`/`await` for asynchronous operations. Agent scripts need to wait on external operations — API calls, model inference, file I/O — and async functions let you express that waiting without blocking the entire program. The host runtime manages the event loop; Mog code never creates threads or manages concurrency primitives directly.
 
@@ -6189,7 +6080,7 @@ async fn example() -> Result<string> {
 
 > **Warning:** Forgetting `await` is a common mistake. If you call an async function without `await`, you get a future object, not the actual result.
 
-You can combine `await` with the `?` operator from Chapter 11. The `await` resolves the future, then `?` unwraps the `Result`:
+You can combine `await` with the `?` operator from Chapter 10. The `await` resolves the future, then `?` unwraps the `Result`:
 
 ```mog
 async fn load_config(path: string) -> Result<Config> {
@@ -6366,7 +6257,7 @@ async fn resolve_address(host: string) -> Result<string> {
 
 ## Error Handling with Async
 
-Async functions combine naturally with `Result<T>` and the `?` operator from Chapter 11. The `await` resolves the future, and `?` unwraps the result:
+Async functions combine naturally with `Result<T>` and the `?` operator from Chapter 10. The `await` resolves the future, and `?` unwraps the result:
 
 ```mog
 async fn create_user(name: string, email: string) -> Result<User> {
@@ -6509,8 +6400,8 @@ async fn main() -> int {
 | `all([f1, f2, f3])` | Wait for all futures to complete |
 | `race([f1, f2])` | Wait for the first future to complete |
 
-Async functions compose with `Result<T>` and `?` from Chapter 11 — `await` resolves the future, then `?` unwraps the result. Use `all()` when you have independent operations that can run in parallel. Use `race()` for timeouts and fallback strategies. Use `spawn` only for side effects you don't need to track. The runtime manages the event loop; your job is to describe what depends on what.
-# Chapter 13: Modules and Packages
+Async functions compose with `Result<T>` and `?` from Chapter 10 — `await` resolves the future, then `?` unwraps the result. Use `all()` when you have independent operations that can run in parallel. Use `race()` for timeouts and fallback strategies. Use `spawn` only for side effects you don't need to track. The runtime manages the event loop; your job is to describe what depends on what.
+# Chapter 12: Modules and Packages
 
 As Mog programs grow beyond a single file, you need a way to split code into logical units, control what's visible to the outside, and compose libraries. Mog uses a Go-style module system: packages group related code, `pub` controls visibility, and `import` brings packages into scope.
 
@@ -6968,8 +6859,8 @@ Key points:
 - **Structure** projects with one directory per package and `mog.mod` at the root
 - **Avoid** circular imports — extract shared code into a common package
 
-Capabilities (Chapter 14) use the same dot-syntax as package access — `fs.read_file()` looks like a module call but is backed by host-provided functions rather than Mog source code. The next chapter explains how that works.
-# Chapter 14: Capabilities — Safe I/O
+Capabilities (Chapter 13) use the same dot-syntax as package access — `fs.read_file()` looks like a module call but is backed by host-provided functions rather than Mog source code. The next chapter explains how that works.
+# Chapter 13: Capabilities — Safe I/O
 
 Mog has no built-in I/O. No file reads, no network calls, no environment variables — nothing that touches the outside world lives in the language itself. All side effects flow through **capabilities**: named interfaces that the host application provides to the script at runtime.
 
@@ -7053,7 +6944,7 @@ fn main() -> int {
 }
 ```
 
-> **Note:** Capabilities use the same dot-syntax as package imports (Chapter 13), but they are backed by host-provided C functions, not Mog source code. The compiler knows the difference because capabilities are declared with `requires`/`optional`, not `import`.
+> **Note:** Capabilities use the same dot-syntax as package imports (Chapter 12), but they are backed by host-provided C functions, not Mog source code. The compiler knows the difference because capabilities are declared with `requires`/`optional`, not `import`.
 
 ## Built-in Capabilities
 
@@ -7245,9 +7136,24 @@ fn do_work() -> int {
 
 > **Tip:** Keep capability-using functions separate from pure computation. This makes your code easier to test — pure functions need no host at all. Notice how `do_work` above has no `requires` and no `await`.
 
+## Conventional Capabilities
+
+Beyond `fs` and `process`, hosts commonly provide these capabilities. None are built into the language — they are conventions that keep Mog scripts portable across different host applications:
+
+| Capability | What it provides |
+|---|---|
+| `http` | HTTP requests |
+| `log` | Structured logging (info, warn, error, debug) |
+| `env` | Environment info, timestamps, random numbers |
+| `ml` | ML operations (matmul, activations, autograd) |
+| `model` | LLM inference |
+| `db` | Database queries |
+
+A host can also define entirely custom capabilities — there is nothing special about the ones listed above.
+
 ## Custom Host Capabilities
 
-The built-in `fs` and `process` capabilities are just the standard ones. Any host application can define its own capabilities with whatever functions make sense for the domain.
+Any host application can define its own capabilities with whatever functions make sense for the domain.
 
 ### `.mogdecl` Files
 
@@ -7327,7 +7233,7 @@ The flow from script to host and back:
 
 The script never knows or cares how the host implements the functions. The `.mogdecl` file is the contract between the two sides.
 
-> **Note:** For details on implementing host functions in C and registering capabilities with the VM, see Chapter 15: Embedding Mog.
+> **Note:** For details on implementing host functions in C and registering capabilities with the VM, see Chapter 14: Embedding Mog.
 
 ### Capability Validation Example
 
@@ -7354,7 +7260,7 @@ If the host only provides `fs` and `process` but not `http`, the script is rejec
 | No declaration | Pure computation, no I/O |
 
 Capabilities are the only way for Mog code to interact with the outside world. This constraint is what makes Mog safe to embed — the host is always in control. The next chapter shows how to set up that host: creating a VM, registering capabilities from C, and enforcing resource limits.
-# Chapter 15: Embedding Mog in a Host Application
+# Chapter 14: Embedding Mog in a Host Application
 
 Mog is designed to be embedded. It's a scripting language that runs inside your application, not a standalone runtime. The host creates a VM, decides what the script can do, enforces resource limits, and tears everything down when it's finished.
 
@@ -7516,7 +7422,7 @@ if (mog_has_capability(vm, "http")) {
 }
 ```
 
-> **Note:** Capability validation is covered from the Mog side in Chapter 14. The `requires` declaration is the script's half of the contract; `mog_validate_capabilities()` is the host's half.
+> **Note:** Capability validation is covered from the Mog side in Chapter 13. The `requires` declaration is the script's half of the contract; `mog_validate_capabilities()` is the host's half.
 
 ## Implementing a Custom Capability
 
@@ -7535,7 +7441,7 @@ capability env {
 }
 ```
 
-This tells the compiler what functions exist and what their types are. See Chapter 14 for more on `.mogdecl` files.
+This tells the compiler what functions exist and what their types are. See Chapter 13 for more on `.mogdecl` files.
 
 ### Step 2: Implement the Host Functions
 
@@ -7770,7 +7676,7 @@ int64_t sum = mog_as_int(result);
 
 ### Returning Errors
 
-Host functions signal errors by returning a `MogValue` with the `MOG_ERROR` tag. The script sees this as an error value that propagates through `?` (see Chapter 11):
+Host functions signal errors by returning a `MogValue` with the `MOG_ERROR` tag. The script sees this as an error value that propagates through `?` (see Chapter 10):
 
 ```c
 static MogValue host_read_sensor(MogVM *vm, MogArgs *args) {
@@ -7941,7 +7847,7 @@ Mog's embedding model provides several layers of safety:
 
 **No raw pointers.** Mog scripts cannot construct or dereference pointers. The only way to hold a host resource is through an opaque `MOG_HANDLE`, and the host controls what operations are valid on it.
 
-**No system calls without capabilities.** There is no `syscall()`, no `exec()`, no way to touch the OS except through capability functions the host explicitly registered. Chapter 14 explains the capability model in detail.
+**No system calls without capabilities.** There is no `syscall()`, no `exec()`, no way to touch the OS except through capability functions the host explicitly registered. Chapter 13 explains the capability model in detail.
 
 **GC-managed memory.** The script cannot leak memory or cause use-after-free. The VM's garbage collector handles all allocations.
 
@@ -8243,7 +8149,7 @@ if (!plugin) {
 }
 ```
 
-This is the same capability model from Chapter 14, applied at load time. The plugin's `requires` declarations are checked against the allowlist before any code runs. A plugin that passes the check cannot later escalate to capabilities it didn't declare.
+This is the same capability model from Chapter 13, applied at load time. The plugin's `requires` declarations are checked against the allowlist before any code runs. A plugin that passes the check cannot later escalate to capabilities it didn't declare.
 
 ### Plugin Protocol (Advanced)
 
@@ -8260,7 +8166,19 @@ Because plugins use `-undefined dynamic_lookup` on macOS, they share the host's 
 
 You don't need to know any of this to use plugins. It's documented here so you can debug issues, write tooling, or implement plugin loaders in languages other than C or Rust.
 
-# Chapter 16: Tensors — N-Dimensional Arrays
+## How Mog Compares to Other Embeddable Languages
+
+If you have used other embeddable languages, here is how Mog differs:
+
+**Lua** is dynamically typed, interpreted (or JIT-compiled via LuaJIT), and has a minimal core. Mog shares Lua's philosophy of being small and embeddable, but adds static types, compiles to native code ahead of time, and enforces capability-based security rather than relying on environment sandboxing. Lua's flexibility is a strength for interactive scripting; Mog trades that flexibility for compile-time safety and native performance.
+
+**Wren** is a class-based, dynamically-typed embeddable language with a clean syntax. Like Mog, it is designed for embedding in host applications. The key differences are that Mog is statically typed, compiles ahead of time, has no classes or inheritance, and provides a formal capability model for security. Wren's object-oriented design makes it natural for game scripting; Mog's functional style with explicit capabilities makes it natural for agent scripting and ML workflows.
+
+**Rhai** is a scripting language for Rust applications, dynamically typed, interpreted. Mog targets a similar embedding scenario but takes a different approach: static types catch errors before execution, QBE-backed compilation produces native-speed code, and the capability system provides security guarantees that a dynamic language cannot offer at compile time.
+
+The common thread: Mog is the statically-typed, ahead-of-time-compiled option in the embeddable language space. It pays for this with a compilation step, but gains type safety, native performance, and a security model that is enforced before the script runs.
+
+# Chapter 15: Tensors — N-Dimensional Arrays
 
 Mog provides tensors as a built-in data type — n-dimensional arrays with a fixed element dtype. They are the interchange format between Mog scripts and host-provided ML capabilities. You create tensors, read and write their elements, reshape them, and pass them to host functions. That's it.
 
@@ -8744,7 +8662,7 @@ async fn main() -> int {
 | Host ML ops | `await ml.forward(t)?` | All compute goes through capabilities |
 
 Tensors are data containers. They hold the numbers. The host provides the math. This separation keeps Mog scripts portable, safe, and small — a script that prepares tensors and calls host capabilities works the same whether the host runs on a laptop CPU or a cluster of GPUs.
-# Chapter 17: Advanced Topics
+# Chapter 16: Advanced Topics
 
 The previous chapters covered the core language — variables, functions, control flow, data structures, error handling, tensors, and embedding. This chapter collects the advanced features and design decisions that round out Mog: type aliases, scoped context blocks, memory layout optimizations, compilation backends, the interrupt system, garbage collection, and the things Mog deliberately leaves out.
 
@@ -9026,7 +8944,7 @@ fn make_particles(n: int) -> [Particle] {
 // When particles is no longer reachable, the GC reclaims the memory
 ```
 
-Closures capture variables by value (see Chapter 7), and the captured environment is itself a GC-allocated block:
+Closures capture variables by value (see Chapter 6), and the captured environment is itself a GC-allocated block:
 
 ```mog
 fn make_counter(start: int) -> fn() -> int {
@@ -9053,18 +8971,18 @@ Mog's design is subtractive. Every feature must justify its complexity, and many
 
 **No macros or metaprogramming.** No compile-time code generation, no syntax extensions, no preprocessor. The language you read is the language that runs. This makes Mog code uniformly readable — there are no project-specific DSLs hiding behind macro expansions.
 
-**No exceptions.** Error handling uses `Result<T>` and the `?` propagation operator (see Chapter 11). Errors are values, not control flow. Every function that can fail says so in its return type, and the compiler enforces that you handle the error or propagate it.
+**No exceptions.** Error handling uses `Result<T>` and the `?` propagation operator (see Chapter 10). Errors are values, not control flow. Every function that can fail says so in its return type, and the compiler enforces that you handle the error or propagate it.
 
-**No null.** Mog uses `?T` (Optional) for values that might be absent — `?int`, `?string` (see Chapter 11). The type system distinguishes between "definitely has a value" and "might not have a value." You cannot accidentally dereference something that does not exist.
+**No null.** Mog uses `?T` (Optional) for values that might be absent — `?int`, `?string` (see Chapter 10). The type system distinguishes between "definitely has a value" and "might not have a value." You cannot accidentally dereference something that does not exist.
 
 **No raw pointers or manual memory management.** All memory is GC-managed. You cannot take the address of a variable, cast between pointer types, or free memory. This eliminates use-after-free, double-free, buffer overflows, and dangling pointers by construction.
 
 **No implicit type coercion.** An `int` does not silently become a `float`. A `float` does not silently become a `string`. All conversions are explicit function calls — `float_from_string`, `int(x)`, and so on. This prevents an entire category of subtle bugs where silent coercion produces unexpected results.
 
-**No standalone execution.** Mog scripts run inside a host application. There is no `mog run file.mog` command that produces a self-contained process with filesystem access, network sockets, or an event loop. The host provides capabilities, and the script declares which ones it needs (see Chapter 14). This is the core security model — a Mog script can only do what its host explicitly permits.
+**No standalone execution.** Mog scripts run inside a host application. There is no `mog run file.mog` command that produces a self-contained process with filesystem access, network sockets, or an event loop. The host provides capabilities, and the script declares which ones it needs (see Chapter 13). This is the core security model — a Mog script can only do what its host explicitly permits.
 
 These omissions are not gaps to be filled in future versions. They are design decisions that keep Mog small, predictable, and safe for embedding. A language that tries to be everything ends up being harder to trust. Mog trades breadth for clarity.
-# Chapter 18: Cookbook — Practical Programs
+# Chapter 17: Cookbook — Practical Programs
 
 This chapter is a collection of complete, runnable Mog programs. Each one demonstrates a combination of language features in a realistic context — loops, structs, closures, error handling, async, capabilities. Read them in order or jump to whichever looks interesting.
 
