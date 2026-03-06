@@ -1,125 +1,4 @@
-@font-face {
-  font-family: 'Mars Std';
-  src:
-    local('Mars Std'),
-    local('MarsStd'),
-    local('Mars'),
-    local('Mars Standard'),
-    url('assets/fonts/mars-std/MarsStandardWeb-Regular.display.woff2') format('woff2');
-  font-style: normal;
-  font-weight: 100 900;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: 'Mars Std';
-  src:
-    local('Mars ExtraLight'),
-    local('Mars Std ExtraLight'),
-    url('assets/fonts/mars-std/MarsStandardWeb-ExtraLight.name.woff2') format('woff2');
-  font-style: normal;
-  font-weight: 200;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: 'Mars Std';
-  src:
-    local('Mars ExtraLight Italic'),
-    local('Mars Std ExtraLight Italic'),
-    url('assets/fonts/mars-std/MarsStandardWeb-ExtraLightItalic.name.woff2') format('woff2');
-  font-style: italic;
-  font-weight: 200;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: 'Statius';
-  src:
-    local('Statius'),
-    local('Statius Text'),
-    url('assets/fonts/statius/Statius-Light-1.woff2') format('woff2');
-  font-style: normal;
-  font-weight: 300;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: 'Statius';
-  src:
-    local('Statius Italic'),
-    local('Statius Text Italic'),
-    url('assets/fonts/statius/Statius-LightItalic-1.woff2') format('woff2');
-  font-style: italic;
-  font-weight: 300;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: 'Statius';
-  src:
-    local('Statius'),
-    local('Statius Text'),
-    url('assets/fonts/statius/Statius-Regular-1.woff2') format('woff2');
-  font-style: normal;
-  font-weight: 400;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: 'Statius';
-  src:
-    local('Statius Italic'),
-    local('Statius Text Italic'),
-    url('assets/fonts/statius/Statius-RegularItalic-1.woff2') format('woff2');
-  font-style: italic;
-  font-weight: 400;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: 'Statius';
-  src:
-    local('Statius Medium'),
-    local('Statius Text Medium'),
-    url('assets/fonts/statius/Statius-Medium-1.woff2') format('woff2');
-  font-style: normal;
-  font-weight: 500;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: 'Statius';
-  src:
-    local('Statius Medium Italic'),
-    local('Statius Text Medium Italic'),
-    url('assets/fonts/statius/Statius-MediumItalic-1.woff2') format('woff2');
-  font-style: italic;
-  font-weight: 500;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: 'Statius';
-  src:
-    local('Statius Semibold'),
-    local('Statius Text Semibold'),
-    url('assets/fonts/statius/Statius-Semibold-1.woff2') format('woff2');
-  font-style: normal;
-  font-weight: 600;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: 'Statius';
-  src:
-    local('Statius Semibold Italic'),
-    local('Statius Text Semibold Italic'),
-    url('assets/fonts/statius/Statius-SemiboldItalic-1.woff2') format('woff2');
-  font-style: italic;
-  font-weight: 600;
-  font-display: swap;
-}
+@import url('https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;500;600;700;800&display=swap');
 
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap');
 
@@ -149,7 +28,7 @@ body {
 
 body {
   position: relative;
-  font-family: 'Statius', 'Times New Roman', Georgia, serif;
+  font-family: 'Open Sans', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
   color: var(--text);
   background:
     radial-gradient(circle at 15% 20%, #d0efff 0%, transparent 34%),
@@ -162,7 +41,8 @@ h1,
 h2,
 h3,
 h4 {
-  font-family: 'Mars Std', 'Segoe UI', 'Helvetica Neue', sans-serif;
+  font-family: 'Open Sans', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+  letter-spacing: -0.01em;
 }
 
 .aurora {
@@ -201,7 +81,7 @@ h4 {
 }
 
 .brand {
-  font-family: 'IBM Plex Mono', 'Courier New', monospace;
+  font-family: 'Open Sans', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
   color: var(--ink);
   font-weight: 700;
   text-decoration: none;
