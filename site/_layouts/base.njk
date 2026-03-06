@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ title }} | Mog</title>
+    <meta
+      name="description"
+      content="Mog language guide: full language tutorial and reference."
+    />
+    <link rel="preload" as="style" href="/styles.css" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="aurora"></div>
+    <header class="site-header">
+      <div class="site-shell">
+        <a class="brand" href="/">Mog</a>
+        <nav aria-label="Primary">
+          <a href="/#guide">Guide</a>
+        </nav>
+      </div>
+    </header>
+    <main class="site-shell guide-page">
+      <section class="hero">
+        <p class="eyebrow">moglang.org</p>
+        <h1>{{ title }}</h1>
+        <p>
+          The complete Mog reference and language guide, rendered from
+          <code>docs/guide.md</code>.
+        </p>
+      </section>
+      {{ content | safe }}
+    </main>
+    <footer class="site-footer">
+      <p>
+        Built as a static site with Eleventy and Shiki — no guide content is duplicated
+        in templates.
+      </p>
+    </footer>
+  </body>
+</html>

@@ -53,6 +53,7 @@ examples/plugins/rust_host/target/
 
 # Generated docs
 guide/
+_site/
 
 # Legacy / stray
 node_modules/
