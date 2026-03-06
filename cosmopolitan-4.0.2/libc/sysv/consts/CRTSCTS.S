@@ -1,2 +1,0 @@
-#include "libc/sysv/consts/syscon.internal.h"
-.syscon termios,CRTSCTS,0x80000000,0x80000000,0x00030000,0x00030000,0x00030000,0x00010000,0x00010000,0x80000000

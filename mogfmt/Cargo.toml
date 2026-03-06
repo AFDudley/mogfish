@@ -1,0 +1,8 @@
+[package]
+name = "mogfmt"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "mogfmt"
+path = "src/main.rs"

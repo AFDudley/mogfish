@@ -1,6 +1,6 @@
 //! Integration tests for rqbe.
 //!
-//! Uses the QBE test suite from vendor/qbe-1.2/test/. Each .ssa file
+//! Uses the QBE test suite from tests/fixtures/. Each .ssa file
 //! embeds a C driver and expected output. We:
 //!   1. Parse the .ssa file to extract QBE IL, C driver, and expected output
 //!   2. Compile the QBE IL via rqbe::compile()
@@ -108,8 +108,8 @@ fn parse_ssa_file(contents: &str) -> SsaTestFile {
 
 /// Resolve the path to a QBE test .ssa file.
 fn ssa_test_path(test_name: &str) -> PathBuf {
-    // Integration tests run from the crate root, so ../vendor is correct.
-    let p = PathBuf::from(format!("../vendor/qbe-1.2/test/{}.ssa", test_name));
+    // Integration tests run from the crate root.
+    let p = PathBuf::from(format!("tests/fixtures/{}.ssa", test_name));
     assert!(p.exists(), "Test file not found: {}", p.display());
     p
 }
@@ -298,7 +298,7 @@ function w $main() {
 #[test]
 fn test_ssa_test_files_exist() {
     // Verify that the QBE test files we reference actually exist.
-    let test_dir = Path::new("../vendor/qbe-1.2/test");
+    let test_dir = Path::new("tests/fixtures");
     assert!(test_dir.exists(), "QBE test directory not found");
 
     let required = [

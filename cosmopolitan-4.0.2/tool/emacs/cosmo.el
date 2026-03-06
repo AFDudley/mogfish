@@ -1,7 +1,0 @@
-;; (require 'ld-script)
-;; (require 'optinfo-mode)
-;; (require 'protobuf-mode)
-(require 'cosmo-format)
-;; (require 'cosmo-asm-mode)
-(require 'cosmo-stuff)
-(provide 'cosmo)

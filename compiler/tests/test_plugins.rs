@@ -4,7 +4,7 @@
 //! assembly → shared library → dlopen → call exported functions.
 //!
 //! Requirements: QBE (`qbe` on PATH or $QBE), a C compiler (`cc`), and
-//! `build/runtime.a` must exist.  Tests that cannot find these tools are
+//! `libmog_runtime.a` must exist.  Tests that cannot find these tools are
 //! skipped rather than failed.
 
 use std::ffi::{c_char, c_void, CStr};

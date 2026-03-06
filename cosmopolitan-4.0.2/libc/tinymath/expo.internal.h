@@ -1,9 +1,0 @@
-#ifndef COSMOPOLITAN_LIBC_TINYMATH_EXPO_H_
-#define COSMOPOLITAN_LIBC_TINYMATH_EXPO_H_
-COSMOPOLITAN_C_START_
-
-double __expo2(double, double);
-float __expo2f(float, float);
-
-COSMOPOLITAN_C_END_
-#endif /* COSMOPOLITAN_LIBC_TINYMATH_EXPO_H_ */

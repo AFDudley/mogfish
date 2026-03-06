@@ -1,2 +1,0 @@
-#include "libc/sysv/consts/syscon.internal.h"
-.syscon ioctl,SIOCSIFFLAGS,0x8914,0x8914,0x80206910,0x80206910,0x80206910,0x80206910,0x80206910,0x8914

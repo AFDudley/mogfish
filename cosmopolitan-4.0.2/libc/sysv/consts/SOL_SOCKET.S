@@ -1,2 +1,0 @@
-#include "libc/sysv/consts/syscon.internal.h"
-.syscon so,SOL_SOCKET,1,1,0xffff,0xffff,0xffff,0xffff,0xffff,0xffff

@@ -1,0 +1,11 @@
+[package]
+name = "mog-bench"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "mog-bench"
+path = "src/main.rs"
+
+[dependencies]
+mog = { path = "../compiler" }

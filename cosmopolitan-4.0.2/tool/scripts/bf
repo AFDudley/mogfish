@@ -1,4 +1,0 @@
-#!/bin/sh
-bing <"$1" |
-  fold |
-  exec less

@@ -224,7 +224,7 @@ pub fn compile_simple(source: &str) -> Result<String, Vec<String>> {
 /// 2. Writes the IR to a temporary file.
 /// 3. Invokes `qbe` to lower the IR to assembly.
 /// 4. Invokes the system assembler (`as`) to produce an object file.
-/// 5. Invokes the system C compiler (`cc`) to link with `runtime.a` and
+/// 5. Invokes the system C compiler (`cc`) to link with `libmog_runtime.a` and
 ///    produce a final executable.
 ///
 /// Returns the path to the produced binary on success.
@@ -283,7 +283,6 @@ pub fn compile_to_binary(source: &str, options: &CompileOptions) -> Result<PathB
             run_command(
                 Command::new(cc_command().get_program())
                     .arg("-c")
-                    .arg("-Iruntime")
                     .arg(extra)
                     .arg("-o")
                     .arg(&c_obj),
@@ -447,7 +446,6 @@ pub fn compile_plugin(
             run_command(
                 Command::new(cc_command().get_program())
                     .arg("-c")
-                    .arg("-Iruntime")
                     .arg(extra)
                     .arg("-o")
                     .arg(&c_obj),
@@ -758,16 +756,12 @@ fn cc_command() -> Command {
     Command::new(cc)
 }
 
-/// Try to locate the Mog runtime archive.
+/// Try to locate the Mog runtime archive (`libmog_runtime.a`).
 ///
-/// Prefers the Rust runtime (`libmog_runtime.a`) over the legacy C runtime
-/// (`runtime.a`).  Falls back through several search strategies.
+/// Falls back through several search strategies.
 fn find_runtime_archive() -> Option<PathBuf> {
     // Candidate filenames in priority order.
-    let names = [
-        "runtime-rs/target/release/libmog_runtime.a", // Rust runtime
-        "build/runtime.a",                            // C runtime (legacy)
-    ];
+    let names = ["runtime-rs/target/release/libmog_runtime.a"];
 
     // 1. Relative to the mog compiler crate's source directory (compile-time).
     {
@@ -806,7 +800,7 @@ fn find_runtime_archive() -> Option<PathBuf> {
 
     // 4. MOG_RUNTIME_DIR env var.
     if let Ok(dir) = env::var("MOG_RUNTIME_DIR") {
-        for base in ["libmog_runtime.a", "runtime.a"] {
+        for base in ["libmog_runtime.a"] {
             let p = PathBuf::from(&dir).join(base);
             if p.exists() {
                 return Some(p);
@@ -957,7 +951,7 @@ mod tests {
         );
     }
 
-    /// End-to-end: compile to binary and run (requires QBE, as, cc, runtime.a)
+    /// End-to-end: compile to binary and run (requires QBE, as, cc, libmog_runtime.a)
     #[test]
     fn e2e_compile_and_run() {
         let source = r#"fn main() -> int { println("e2e-ok"); return 0; }"#;

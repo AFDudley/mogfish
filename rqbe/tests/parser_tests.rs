@@ -476,8 +476,7 @@ function l $extend(w %x) {
 #[test]
 #[ignore]
 fn parse_sum_ssa() {
-    let contents =
-        std::fs::read_to_string("../vendor/qbe-1.2/test/sum.ssa").expect("sum.ssa not found");
+    let contents = std::fs::read_to_string("tests/fixtures/sum.ssa").expect("sum.ssa not found");
     // Extract just the QBE IL (before driver section)
     let qbe_source: String = contents
         .lines()
@@ -492,8 +491,7 @@ fn parse_sum_ssa() {
 #[test]
 #[ignore]
 fn parse_eucl_ssa() {
-    let contents =
-        std::fs::read_to_string("../vendor/qbe-1.2/test/eucl.ssa").expect("eucl.ssa not found");
+    let contents = std::fs::read_to_string("tests/fixtures/eucl.ssa").expect("eucl.ssa not found");
     let qbe_source: String = contents
         .lines()
         .take_while(|l| !l.starts_with("# >>> driver"))
@@ -507,8 +505,7 @@ fn parse_eucl_ssa() {
 #[test]
 #[ignore]
 fn parse_abi1_ssa() {
-    let contents =
-        std::fs::read_to_string("../vendor/qbe-1.2/test/abi1.ssa").expect("abi1.ssa not found");
+    let contents = std::fs::read_to_string("tests/fixtures/abi1.ssa").expect("abi1.ssa not found");
     let qbe_source: String = contents
         .lines()
         .take_while(|l| !l.starts_with("# >>> driver"))
