@@ -1,6 +1,6 @@
 # Mog
 
-A small, statically-typed, embeddable language for ML workflows and LLM agent scripting. Has a pure-Rust toolchain: Rust compiler, Rust runtime (~6K lines), and an in-process QBE backend (`rqbe`, a safe Rust rewrite of QBE). Think of it as a statically-typed Lua with tensors, async I/O, and a capability model where the host provides all I/O and ML operations.
+A small, statically-typed, embeddable programming language. Has a pure-Rust toolchain: Rust compiler, Rust runtime (~6K lines), and an in-process [QBE](https://c9x.me/compile/) backend ([`rqbe`](rqbe/), a safe Rust rewrite). Think of it as a statically-typed Lua with async I/O and a capability model where the host controls all side effects.
 
 - **[Language Guide](docs/guide.md)** — Full tutorial from first program through async, modules, embedding, and plugins.
 - **[Showcase](showcase.mog)** — One file demonstrating every language feature (755 lines).
@@ -8,20 +8,19 @@ A small, statically-typed, embeddable language for ML workflows and LLM agent sc
 
 ## Why Mog
 
-Most ML work today lives in Python scripts that are difficult to sandbox, expensive to deploy, and opaque to the LLM agents that increasingly need to write and execute code. Mog exists to give those agents — and the humans supervising them — a language that is small enough to fit entirely in a model's context window, safe enough to run untrusted code without fear, and expressive enough to do real ML work without dropping into a general-purpose language.
+Mog exists to be a language that is small enough to fit entirely in a model's context window, safe enough to run untrusted code without fear, and expressive enough to do real work without dropping into a general-purpose language.
 
 Mog is not a standalone systems language. It is always embedded inside a host application. The host decides what the script can do: read a file, call an API, run inference on a model. The script declares what it needs (`requires http, model`) and the host either grants those capabilities or refuses to run it. There is no way for a Mog script to escape its sandbox, access the filesystem behind the host's back, or crash the process. This makes it suitable for running agent-generated code in production, where the alternative is either no code execution at all or an elaborate container-based sandbox around a general-purpose language.
 
-The language compiles to native code through `rqbe` (an in-process QBE backend written in safe Rust), so tight numerical loops run at C speed rather than interpreter speed. Tensors are a built-in data structure — n-dimensional arrays with hardware-relevant dtypes like `f16` and `bf16`, element read/write, and shape manipulation. All ML operations (matmul, activations, loss functions, autograd) are provided by the host through the same capability system as I/O. The language gives you the data structure; the host gives you the compute. This means the host can route tensor operations to whatever backend makes sense — CPU, GPU, or a remote accelerator — without the language needing to know.
+The language compiles to native code through [`rqbe`](rqbe/) (an in-process [QBE](https://c9x.me/compile/) backend written in safe Rust), so tight loops run at C speed rather than interpreter speed.
 
 ## Use Cases
 
 - LLM agent tool-use scripts
-- ML training and inference workflows
 - Plugin/extension scripting for host applications
 - Short automation scripts
 
-Mog is explicitly **not** for systems programming, standalone applications, or replacing general-purpose languages. It has no raw pointers, no manual memory management, no threads, no POSIX syscalls, no inheritance, no macros, and no generics beyond tensor dtype parameterization. Each of these omissions is deliberate — they keep the surface area small and the security model tractable.
+Mog is explicitly **not** for systems programming, standalone applications, or replacing general-purpose languages. It has no raw pointers, no manual memory management, no threads, no POSIX syscalls, no inheritance, no macros, and no generics. Each of these omissions is deliberate — they keep the surface area small and the security model tractable.
 
 ## Design Philosophy
 
@@ -30,13 +29,13 @@ Mog is explicitly **not** for systems programming, standalone applications, or r
 3. **Familiar syntax** — curly braces, `fn`, `->`, `:=`. A blend of Rust, Go, and TypeScript that LLMs already generate fluently. No novel syntax without strong justification.
 4. **Safe by default** — garbage collected, bounds-checked, no null, no raw pointers. The language cannot crash the host or escape its sandbox.
 5. **Host provides I/O** — the language has no built-in file, network, or system access. All side effects go through capabilities explicitly granted by the embedding host.
-6. **Tensors as data, ML as capability** — the language provides n-dimensional arrays with hardware-relevant dtypes (f16, bf16, f32, f64) and element read/write. All ML operations (matmul, activations, autograd) are provided by the host via capabilities, not built into the language.
+6. **Host provides compute** — the host can expose any functionality (ML, databases, network) through capabilities. The language stays small; the host decides what's available.
 
 ## Toolchain
 
 The compiler and runtime are pure Rust.
 
-The Rust compiler (`mogc`) is a standalone native binary. It uses `rqbe`, an in-process QBE backend written in safe Rust (~15K lines), to produce fast native code with minimal compile times. The Rust runtime (`runtime-rs/`, ~6K lines) provides GC, async, strings, arrays, maps, tensors, and plugin support.
+The Rust compiler (`mogc`) is a standalone native binary. It uses [`rqbe`](rqbe/), an in-process [QBE](https://c9x.me/compile/) backend written in safe Rust (~15K lines), to produce fast native code with minimal compile times. The Rust runtime (`runtime-rs/`, ~6K lines) provides GC, async, strings, arrays, maps, and plugin support.
 
 **Build the compiler:**
 
