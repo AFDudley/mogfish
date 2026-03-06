@@ -5,6 +5,8 @@
 
 use std::ptr;
 
+use crate::gc::gc_external_alloc;
+
 // ---------------------------------------------------------------------------
 // MogValue — 24-byte tagged union matching the C layout.
 //
@@ -238,7 +240,7 @@ extern "C" fn fs_read_file(_vm: *mut u8, args: *const MogValue, nargs: i32) -> M
         let len = libc::ftell(f) as usize;
         libc::fseek(f, 0, libc::SEEK_SET);
 
-        let buf = libc::malloc(len + 1) as *mut u8;
+        let buf = gc_external_alloc(len + 1);
         if buf.is_null() {
             libc::fclose(f);
             return MogValue::error(ERR_FS_READ_OOM.as_ptr());
@@ -407,9 +409,9 @@ extern "C" fn process_cwd(_vm: *mut u8, _args: *const MogValue, _nargs: i32) -> 
         let result = libc::getcwd(buf.as_mut_ptr() as *mut libc::c_char, buf.len());
         if !result.is_null() {
             // We need to return a pointer that outlives this stack frame.
-            // Copy into a malloc'd buffer.
+            // Copy into a host-managed buffer.
             let len = libc::strlen(buf.as_ptr() as *const libc::c_char);
-            let dest = libc::malloc(len + 1) as *mut u8;
+            let dest = gc_external_alloc(len + 1);
             if !dest.is_null() {
                 ptr::copy_nonoverlapping(buf.as_ptr(), dest, len + 1);
                 return MogValue::string(dest);

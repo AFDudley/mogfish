@@ -17,6 +17,14 @@
 #include <string.h>
 #include <time.h>
 
+#ifndef MOG_HOST_LIMITS_MAX_MEMORY
+#define MOG_HOST_LIMITS_MAX_MEMORY (64 * 1024 * 1024)
+#endif
+
+#ifndef MOG_HOST_LIMITS_INITIAL_MEMORY
+#define MOG_HOST_LIMITS_INITIAL_MEMORY (8 * 1024 * 1024)
+#endif
+
 /* ============================================================
  * Host function implementations for the "env" capability
  * ============================================================ */
@@ -51,6 +59,25 @@ static MogValue host_env_log(MogVM *vm, MogArgs *args) {
     const char *message = mog_arg_string(args, 0);
     printf("%s\n", message);
     return mog_none();
+}
+
+typedef struct {
+    size_t max_memory;
+    int max_cpu_ms;
+    int max_stack_depth;
+    size_t initial_memory;
+} MogLimits;
+
+void mog_vm_set_limits(MogVM *vm, const MogLimits *limits);
+
+static void setup_mog_limits(MogVM *vm) {
+    MogLimits limits = {
+        .max_memory = MOG_HOST_LIMITS_MAX_MEMORY,
+        .max_cpu_ms = 0,
+        .max_stack_depth = 1024,
+        .initial_memory = MOG_HOST_LIMITS_INITIAL_MEMORY,
+    };
+    mog_vm_set_limits(vm, &limits);
 }
 
 /*
@@ -106,6 +133,7 @@ static void setup_mog_vm(void) {
         fprintf(stderr, "host: failed to create MogVM\n");
         exit(1);
     }
+    setup_mog_limits(vm);
 
     /* Register the "env" capability */
     if (mog_register_capability(vm, "env", env_functions) != 0) {

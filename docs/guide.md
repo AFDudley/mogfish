@@ -7393,6 +7393,7 @@ struct MogLimits {
     max_memory: u64,
     max_cpu_ms: u64,
     max_stack_depth: u64,
+    initial_memory: u64,
 }
 
 // Pre-main initialization on macOS — runs before main()
@@ -7403,7 +7404,13 @@ static INIT: unsafe extern "C" fn() = {
         let vm = mog_vm_new();
         mog_vm_set_global(vm);
         mog_register_posix_host(vm);
-        let limits = MogLimits { max_memory: 0, max_cpu_ms: 5000, max_stack_depth: 0 };
+        // initial_memory is the starting GC threshold (0 = default start at 1MB).
+        let limits = MogLimits {
+            max_memory: 0,
+            max_cpu_ms: 5000,
+            max_stack_depth: 0,
+            initial_memory: 0,
+        };
         mog_vm_set_limits(vm, &limits);
     }
     init
@@ -7824,6 +7831,24 @@ static MogValue host_db_query(MogVM *vm, MogArgs *args) {
 
 An embedded script should never be able to freeze or crash the host. Mog provides three mechanisms for resource control.
 
+### Memory Limits
+
+Set a maximum heap size and an initial GC threshold:
+
+```c
+MogLimits limits = {
+  .max_memory     = 64 * 1024 * 1024, // 64MB hard cap
+  .max_cpu_ms     = 0,
+  .max_stack_depth = 0,
+  .initial_memory = 4 * 1024 * 1024,  // collect after ~4MB growth
+};
+mog_vm_set_limits(vm, &limits);
+```
+
+If allocations approach the configured `max_memory`, the collector runs eagerly to
+recover memory before rejecting further growth. If collection cannot free enough,
+an interrupt is requested so the host can regain control.
+
 ### CPU Time Limits
 
 Set a maximum execution time via `MogLimits`:
@@ -7832,7 +7857,8 @@ Set a maximum execution time via `MogLimits`:
 MogLimits limits = {
   .max_memory     = 0,     // 0 = unlimited
   .max_cpu_ms     = 5000,  // 5 seconds
-  .max_stack_depth = 0     // 0 = default (1024)
+  .max_stack_depth = 0,    // 0 = default (1024)
+  .initial_memory = 0,     // 0 = runtime default start threshold
 };
 mog_vm_set_limits(vm, &limits);
 ```

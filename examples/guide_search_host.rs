@@ -35,6 +35,18 @@ struct MogValue {
     data: MogValueData,
 }
 
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct MogLimits {
+    max_memory: usize,
+    max_cpu_ms: i32,
+    max_stack_depth: i32,
+    initial_memory: usize,
+}
+
+const GUEST_MAX_MEMORY: usize = 64 * 1024 * 1024;
+const GUEST_INITIAL_MEMORY: usize = 8 * 1024 * 1024;
+
 type MogHostFn = extern "C" fn(*mut u8, *const MogValue, i32) -> MogValue;
 
 #[repr(C)]
@@ -91,6 +103,7 @@ unsafe extern "C" {
     fn mog_vm_new() -> *mut u8;
     fn mog_register_capability(vm: *mut u8, name: *const u8, entries: *const MogCapEntry) -> i32;
     fn mog_vm_set_global(vm: *mut u8);
+    fn mog_vm_set_limits(vm: *mut u8, limits: *const MogLimits);
     fn mog_loop_get_global() -> *mut u8;
     fn mog_future_new() -> *mut u8;
     fn mog_future_complete(f: *mut u8, value: i64);
@@ -252,6 +265,13 @@ unsafe extern "C" fn setup_mog_vm() {
     }
 
     unsafe {
+        let limits = MogLimits {
+            max_memory: GUEST_MAX_MEMORY,
+            max_cpu_ms: 0,
+            max_stack_depth: 1024,
+            initial_memory: GUEST_INITIAL_MEMORY,
+        };
+        mog_vm_set_limits(vm, &limits);
         mog_register_capability(vm, b"http\0".as_ptr(), HTTP_FUNCTIONS.as_ptr());
         mog_register_capability(vm, b"log\0".as_ptr(), LOG_FUNCTIONS.as_ptr());
         mog_vm_set_global(vm);

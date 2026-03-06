@@ -39,6 +39,18 @@ struct MogValue {
     data: MogValueData,
 }
 
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct MogLimits {
+    max_memory: usize,
+    max_cpu_ms: i32,
+    max_stack_depth: i32,
+    initial_memory: usize,
+}
+
+const GUEST_MAX_MEMORY: usize = 64 * 1024 * 1024;
+const GUEST_INITIAL_MEMORY: usize = 8 * 1024 * 1024;
+
 // ---------------------------------------------------------------------------
 // Plugin info structs (matches runtime-rs/src/plugin.rs)
 // ---------------------------------------------------------------------------
@@ -71,6 +83,7 @@ unsafe extern "C" {
     fn mog_vm_new() -> *mut u8;
     fn mog_vm_free(vm: *mut u8);
     fn mog_vm_set_global(vm: *mut u8);
+    fn mog_vm_set_limits(vm: *mut u8, limits: *const MogLimits);
     fn mog_load_plugin(path: *const u8) -> *mut u8;
     fn mog_plugin_get_info(plugin: *const u8) -> *const u8;
     fn mog_plugin_call(
@@ -122,6 +135,13 @@ fn main() {
         std::process::exit(1);
     }
     unsafe {
+        let limits = MogLimits {
+            max_memory: GUEST_MAX_MEMORY,
+            max_cpu_ms: 0,
+            max_stack_depth: 1024,
+            initial_memory: GUEST_INITIAL_MEMORY,
+        };
+        mog_vm_set_limits(vm, &limits);
         mog_vm_set_global(vm);
     }
 

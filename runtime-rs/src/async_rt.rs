@@ -1,9 +1,11 @@
 // Mog async runtime — event loop, futures, coroutine scheduling.
 //
 // Port of runtime/mog_async.c.  All allocations use Box/Vec (malloc-backed),
-// NOT the GC, to stay independent of the collector and avoid problems with
-// LLVM coroutine frames.
+// NOT the main GC, to stay independent of managed objects and avoid problems with
+// LLVM coroutine frames. Host-managed runtime structures use gc_external_alloc/free
+// so they stay under guest memory-limit accounting.
 
+use crate::gc::{gc_external_alloc, gc_external_free};
 use std::ptr;
 
 // ---------------------------------------------------------------------------
@@ -134,15 +136,55 @@ pub extern "C" fn mog_loop_get_global() -> *mut u8 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mog_loop_new() -> *mut u8 {
-    let el = Box::new(MogEventLoop {
-        ready_head: ptr::null_mut(),
-        ready_tail: ptr::null_mut(),
-        timers: ptr::null_mut(),
-        watchers: ptr::null_mut(),
-        running: 0,
-        pending_count: 0,
-    });
-    Box::into_raw(el) as *mut u8
+    let raw = gc_external_alloc(std::mem::size_of::<MogEventLoop>());
+    if raw.is_null() {
+        return ptr::null_mut();
+    }
+    let el = raw as *mut MogEventLoop;
+    unsafe {
+        *el = MogEventLoop {
+            ready_head: ptr::null_mut(),
+            ready_tail: ptr::null_mut(),
+            timers: ptr::null_mut(),
+            watchers: ptr::null_mut(),
+            running: 0,
+            pending_count: 0,
+        };
+    }
+    el as *mut u8
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mog_future_new() -> *mut u8 {
+    let raw = gc_external_alloc(std::mem::size_of::<MogFuture>());
+    if raw.is_null() {
+        return ptr::null_mut();
+    }
+    let ptr = raw as *mut MogFuture;
+    unsafe {
+        ptr::write(
+            ptr,
+            MogFuture {
+                state: MOG_FUTURE_PENDING,
+                _pad: 0,
+                result: 0,
+                coro_handle: ptr::null_mut(),
+                coro_frame: ptr::null_mut(),
+                next: ptr::null_mut(),
+                sub_futures: ptr::null_mut(),
+                sub_count: 0,
+                sub_done: 0,
+                sub_results: ptr::null_mut(),
+                parent: ptr::null_mut(),
+            },
+        );
+    }
+    unsafe {
+        if !G_LOOP.is_null() {
+            (*G_LOOP).pending_count += 1;
+        }
+    }
+    ptr as *mut u8
 }
 
 #[unsafe(no_mangle)]
@@ -157,7 +199,7 @@ pub extern "C" fn mog_loop_free(loop_ptr: *mut u8) {
         let mut t = el.timers;
         while !t.is_null() {
             let next = (*t).next;
-            drop(Box::from_raw(t));
+            gc_external_free(t as *mut u8);
             t = next;
         }
 
@@ -165,40 +207,12 @@ pub extern "C" fn mog_loop_free(loop_ptr: *mut u8) {
         let mut w = el.watchers;
         while !w.is_null() {
             let next = (*w).next;
-            drop(Box::from_raw(w));
+            gc_external_free(w as *mut u8);
             w = next;
         }
 
-        drop(Box::from_raw(el));
+        gc_external_free(loop_ptr);
     }
-}
-
-// ---------------------------------------------------------------------------
-// Future operations
-// ---------------------------------------------------------------------------
-
-#[unsafe(no_mangle)]
-pub extern "C" fn mog_future_new() -> *mut u8 {
-    let f = Box::new(MogFuture {
-        state: MOG_FUTURE_PENDING,
-        _pad: 0,
-        result: 0,
-        coro_handle: ptr::null_mut(),
-        coro_frame: ptr::null_mut(),
-        next: ptr::null_mut(),
-        sub_futures: ptr::null_mut(),
-        sub_count: 0,
-        sub_done: 0,
-        sub_results: ptr::null_mut(),
-        parent: ptr::null_mut(),
-    });
-    let ptr = Box::into_raw(f);
-    unsafe {
-        if !G_LOOP.is_null() {
-            (*G_LOOP).pending_count += 1;
-        }
-    }
-    ptr as *mut u8
 }
 
 #[unsafe(no_mangle)]
@@ -340,19 +354,19 @@ pub extern "C" fn mog_future_free(f: *mut u8) {
         let future = &mut *(f as *mut MogFuture);
         // Free coro_frame if allocated
         if !future.coro_frame.is_null() {
-            libc::free(future.coro_frame as *mut libc::c_void);
+            gc_external_free(future.coro_frame);
             future.coro_frame = ptr::null_mut();
         }
         // Free sub_futures array
         if !future.sub_futures.is_null() {
-            libc::free(future.sub_futures as *mut libc::c_void);
+            gc_external_free(future.sub_futures as *mut u8);
         }
         // Free sub_results array
         if !future.sub_results.is_null() {
-            libc::free(future.sub_results as *mut libc::c_void);
+            gc_external_free(future.sub_results as *mut u8);
         }
         // Free the future itself
-        drop(Box::from_raw(f as *mut MogFuture));
+        gc_external_free(f);
     }
 }
 
@@ -384,21 +398,31 @@ pub extern "C" fn mog_loop_schedule(loop_ptr: *mut u8, coro_handle: *mut u8) {
         return;
     }
     // Create a transient heap-allocated future to carry the handle through the ready queue
-    let f = Box::new(MogFuture {
-        state: MOG_FUTURE_READY,
-        _pad: 0,
-        result: 0,
-        coro_handle,
-        coro_frame: ptr::null_mut(),
-        next: ptr::null_mut(),
-        sub_futures: ptr::null_mut(),
-        sub_count: 0,
-        sub_done: 0,
-        sub_results: ptr::null_mut(),
-        parent: ptr::null_mut(),
-    });
-    let ptr = Box::into_raw(f) as *mut u8;
-    mog_loop_enqueue_ready(loop_ptr, ptr);
+    let raw = gc_external_alloc(std::mem::size_of::<MogFuture>());
+    if raw.is_null() {
+        crate::vm::mog_request_interrupt();
+        return;
+    }
+    let ptr = raw as *mut MogFuture;
+    unsafe {
+        ptr::write(
+            ptr,
+            MogFuture {
+                state: MOG_FUTURE_READY,
+                _pad: 0,
+                result: 0,
+                coro_handle,
+                coro_frame: ptr::null_mut(),
+                next: ptr::null_mut(),
+                sub_futures: ptr::null_mut(),
+                sub_count: 0,
+                sub_done: 0,
+                sub_results: ptr::null_mut(),
+                parent: ptr::null_mut(),
+            },
+        );
+    }
+    mog_loop_enqueue_ready(loop_ptr, ptr as *mut u8);
 }
 
 // ---------------------------------------------------------------------------
@@ -447,12 +471,21 @@ unsafe fn add_timer_inner(
     result_value: i64,
 ) {
     unsafe {
-        let timer = Box::into_raw(Box::new(MogTimer {
-            deadline_ns: now_ns() + delay_ms * 1_000_000,
-            future,
-            result_value,
-            next: ptr::null_mut(),
-        }));
+        let timer = gc_external_alloc(std::mem::size_of::<MogTimer>());
+        if timer.is_null() {
+            crate::vm::mog_request_interrupt();
+            return;
+        }
+        let timer = timer as *mut MogTimer;
+        ptr::write(
+            timer,
+            MogTimer {
+                deadline_ns: now_ns() + delay_ms * 1_000_000,
+                future,
+                result_value,
+                next: ptr::null_mut(),
+            },
+        );
 
         // Insert sorted by deadline
         if el.timers.is_null() || (*timer).deadline_ns < (*el.timers).deadline_ns {
@@ -491,12 +524,21 @@ pub extern "C" fn mog_loop_add_fd_watcher_events(
     }
     unsafe {
         let el = &mut *(loop_ptr as *mut MogEventLoop);
-        let w = Box::into_raw(Box::new(MogFdWatcher {
-            fd,
-            events,
-            future: future as *mut MogFuture,
-            next: el.watchers,
-        }));
+        let w = gc_external_alloc(std::mem::size_of::<MogFdWatcher>());
+        if w.is_null() {
+            crate::vm::mog_request_interrupt();
+            return;
+        }
+        let w = w as *mut MogFdWatcher;
+        ptr::write(
+            w,
+            MogFdWatcher {
+                fd,
+                events,
+                future: future as *mut MogFuture,
+                next: el.watchers,
+            },
+        );
         el.watchers = w;
     }
 }
@@ -560,7 +602,7 @@ pub extern "C" fn mog_loop_run(loop_ptr: *mut u8) {
                 el.timers = (*timer).next;
                 let future_ptr = (*timer).future as *mut u8;
                 let result_val = (*timer).result_value;
-                drop(Box::from_raw(timer));
+                gc_external_free(timer as *mut u8);
                 mog_future_complete(future_ptr, result_val);
             }
 
@@ -693,11 +735,16 @@ pub extern "C" fn mog_loop_run(loop_ptr: *mut u8) {
                                             slen -= 1;
                                             buf[slen] = 0;
                                         }
-                                        // Allocate via gc_alloc
-                                        unsafe extern "C" {
-                                            fn gc_alloc(size: usize) -> *mut u8;
+                                        // Allocate via gc_external_alloc
+                                        let dest = gc_external_alloc(slen + 1);
+                                        if dest.is_null() {
+                                            crate::vm::mog_request_interrupt();
+                                            mog_future_complete(watcher_future, 0);
+                                            *prev_ptr = next;
+                                            gc_external_free(w as *mut u8);
+                                            w = next;
+                                            continue;
                                         }
-                                        let dest = gc_alloc(slen + 1);
                                         ptr::copy_nonoverlapping(buf.as_ptr(), dest, slen + 1);
                                         mog_future_complete(watcher_future, dest as i64);
                                     } else {
@@ -708,7 +755,7 @@ pub extern "C" fn mog_loop_run(loop_ptr: *mut u8) {
                                     // Generic fd ready — complete with fd number
                                     mog_future_complete(watcher_future, watcher_fd as i64);
                                 }
-                                drop(Box::from_raw(w));
+                                gc_external_free(w as *mut u8);
                             } else {
                                 prev_ptr = &mut (*w).next;
                             }
@@ -783,10 +830,12 @@ pub extern "C" fn async_read_line(coro_handle: *mut u8) -> *mut u8 {
                     slen -= 1;
                     buf[slen] = 0;
                 }
-                unsafe extern "C" {
-                    fn gc_alloc(size: usize) -> *mut u8;
+                let dest = gc_external_alloc(slen + 1);
+                if dest.is_null() {
+                    crate::vm::mog_request_interrupt();
+                    mog_future_complete(future_ptr, 0);
+                    return future_ptr;
                 }
-                let dest = gc_alloc(slen + 1);
                 ptr::copy_nonoverlapping(buf.as_ptr(), dest, slen + 1);
                 mog_future_complete(future_ptr, dest as i64);
             } else {
@@ -816,11 +865,41 @@ pub extern "C" fn mog_all(futures: *const *mut u8, count: i32) -> *mut u8 {
     unsafe {
         let parent = &mut *(parent_ptr as *mut MogFuture);
 
-        // Allocate sub_futures and sub_results arrays via malloc (C-compatible)
-        let sub_futures_bytes = (count as usize) * std::mem::size_of::<*mut MogFuture>();
-        let _sub_results_bytes = (count as usize) * std::mem::size_of::<i64>();
-        parent.sub_futures = libc::malloc(sub_futures_bytes) as *mut *mut MogFuture;
-        parent.sub_results = libc::calloc(count as usize, std::mem::size_of::<i64>()) as *mut i64;
+        let sub_futures_bytes = match (count as usize).checked_mul(std::mem::size_of::<*mut MogFuture>()) {
+            Some(bytes) => bytes,
+            None => {
+                crate::vm::mog_request_interrupt();
+                mog_future_set_error(parent_ptr, -1);
+                return parent_ptr;
+            }
+        };
+        let sub_results_bytes = match (count as usize).checked_mul(std::mem::size_of::<i64>()) {
+            Some(bytes) => bytes,
+            None => {
+                crate::vm::mog_request_interrupt();
+                mog_future_set_error(parent_ptr, -1);
+                return parent_ptr;
+            }
+        };
+
+        let sub_futures = gc_external_alloc(sub_futures_bytes) as *mut *mut MogFuture;
+        if sub_futures.is_null() {
+            crate::vm::mog_request_interrupt();
+            mog_future_set_error(parent_ptr, -1);
+            return parent_ptr;
+        }
+        let sub_results = gc_external_alloc(sub_results_bytes) as *mut i64;
+        if sub_results.is_null() {
+            gc_external_free(sub_futures as *mut u8);
+            crate::vm::mog_request_interrupt();
+            mog_future_set_error(parent_ptr, -1);
+            return parent_ptr;
+        }
+        ptr::write_bytes(sub_futures as *mut u8, 0, sub_futures_bytes);
+        ptr::write_bytes(sub_results as *mut u8, 0, sub_results_bytes);
+
+        parent.sub_futures = sub_futures;
+        parent.sub_results = sub_results;
         parent.sub_count = count;
         parent.sub_done = 0;
 

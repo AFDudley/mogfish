@@ -505,8 +505,8 @@ fn interrupt_for_in_index_has_check() {
 fn interrupt_check_calls_exit() {
     let ir = qbe("x := 0\nwhile (x < 10) { x = x + 1 }");
     assert!(
-        ir.contains("call $exit(w 99)") || ir.contains("$exit"),
-        "interrupt check should call exit: {ir}"
+        ir.contains("call $mog_request_interrupt()"),
+        "interrupt check should request interrupt: {ir}"
     );
 }
 

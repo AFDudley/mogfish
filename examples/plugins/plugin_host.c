@@ -14,6 +14,33 @@
 #include "mog.h"
 #include "mog_plugin.h"
 
+#ifndef MOG_HOST_LIMITS_MAX_MEMORY
+#define MOG_HOST_LIMITS_MAX_MEMORY (64 * 1024 * 1024)
+#endif
+
+#ifndef MOG_HOST_LIMITS_INITIAL_MEMORY
+#define MOG_HOST_LIMITS_INITIAL_MEMORY (8 * 1024 * 1024)
+#endif
+
+typedef struct {
+    size_t max_memory;
+    int max_cpu_ms;
+    int max_stack_depth;
+    size_t initial_memory;
+} MogLimits;
+
+void mog_vm_set_limits(MogVM *vm, const MogLimits *limits);
+
+static void setup_mog_limits(MogVM *vm) {
+    MogLimits limits = {
+        .max_memory = MOG_HOST_LIMITS_MAX_MEMORY,
+        .max_cpu_ms = 0,
+        .max_stack_depth = 1024,
+        .initial_memory = MOG_HOST_LIMITS_INITIAL_MEMORY,
+    };
+    mog_vm_set_limits(vm, &limits);
+}
+
 int main(int argc, char **argv) {
     /* Create a VM instance. The math plugin has no `requires` declarations
      * so it needs no registered capabilities — an empty VM suffices. */
@@ -22,6 +49,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "Failed to create MogVM\n");
         return 1;
     }
+    setup_mog_limits(vm);
     mog_vm_set_global(vm);
 
     /* Load the plugin from the path given on the command line, or a default. */

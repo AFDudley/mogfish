@@ -150,8 +150,8 @@ fn while_true_loop() {
 fn while_loop_contains_exit_on_interrupt() {
     let ir = qbe("x := 0\nwhile (x < 10) { println(x) }");
     assert!(
-        ir.contains("call $exit(w 99)"),
-        "expected exit(99) for interrupt"
+        ir.contains("call $mog_request_interrupt()"),
+        "expected mog_request_interrupt() for interrupt"
     );
 }
 

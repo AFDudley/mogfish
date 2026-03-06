@@ -15,7 +15,6 @@
 // All `extern "C"` functions use the exact names the QBE-generated code calls.
 
 use core::ptr;
-use std::process;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -29,6 +28,12 @@ const MAX_CACHED_MAPPINGS: usize = 16;
 
 /// Maximum GC root slots per shadow-stack frame.
 const MAX_FRAME_SLOTS: usize = 256;
+
+/// Trigger a collection when usage is this close to the memory cap.
+const MEM_LIMIT_SOFT_SLACK: usize = 64 * 1024;
+
+/// Default allocation threshold before any explicit limits are configured.
+const DEFAULT_ALLOC_THRESHOLD: usize = 1024 * 1024;
 
 // ---------------------------------------------------------------------------
 // ObjectKind — must match the compiler's tag values
@@ -200,13 +205,17 @@ struct MogTensor {
 
 static mut HEAP: *mut Block = ptr::null_mut();
 static mut HEAP_SIZE: usize = 0;
-static mut ALLOC_THRESHOLD: usize = 1024 * 1024;
+static mut ALLOC_THRESHOLD: usize = DEFAULT_ALLOC_THRESHOLD;
 static mut ALLOC_COUNT: usize = 0;
 static mut GC_ALLOCATED_BYTES: usize = 0;
 static mut GC_LIVE_BYTES: usize = 0;
 static mut GC_TOTAL_COLLECTIONS: usize = 0;
 static mut GC_GROWTH_FACTOR: f64 = 2.0;
 static mut GC_MIN_THRESHOLD: usize = 64 * 1024;
+static mut GC_MEMORY_LIMIT: usize = 0;
+static mut GC_INITIAL_MEMORY: usize = 0;
+static mut GC_EXTERNAL_BYTES: usize = 0;
+static mut GC_OOM: bool = false;
 
 static mut MARK_STACK: MarkStack = MarkStack::new();
 
@@ -237,6 +246,151 @@ fn get_nanos() -> u64 {
         libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts);
     }
     ts.tv_sec as u64 * 1_000_000_000 + ts.tv_nsec as u64
+}
+
+fn tracked_heap_bytes() -> usize {
+    unsafe { HEAP_SIZE.saturating_add(GC_EXTERNAL_BYTES) }
+}
+
+fn total_alloc_bytes(size: usize) -> Option<usize> {
+    let header = std::mem::size_of::<usize>();
+    size.checked_add(header)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn gc_external_alloc(size: usize) -> *mut u8 {
+    if size == 0 {
+        return std::ptr::null_mut();
+    }
+
+    let total = match total_alloc_bytes(size) {
+        Some(v) => v,
+        None => return std::ptr::null_mut(),
+    };
+
+    if !gc_reserve_external_memory(total) {
+        return std::ptr::null_mut();
+    }
+
+    let raw = unsafe { libc::malloc(total) as *mut usize };
+    if raw.is_null() {
+        gc_release_external_memory(total);
+        return std::ptr::null_mut();
+    }
+
+    unsafe {
+        *raw = size;
+    }
+    unsafe { raw.add(1) as *mut u8 }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn gc_external_free(ptr: *mut u8) {
+    if ptr.is_null() {
+        return;
+    }
+
+    let base = unsafe { (ptr as *mut usize).sub(1) };
+    let user_size = unsafe { *base };
+    if let Some(total) = total_alloc_bytes(user_size) {
+        unsafe {
+            libc::free(base as *mut libc::c_void);
+            gc_release_external_memory(total);
+        }
+    } else {
+        unsafe {
+            libc::free(base as *mut libc::c_void);
+        }
+    }
+}
+
+/// Configure the GC memory limit and starting threshold.
+///
+/// `max_memory` is the hard cap in bytes (0 = unlimited).
+/// `initial_memory` is the initial threshold for collection before growing.
+pub(crate) fn gc_set_memory_limits(max_memory: usize, initial_memory: usize) {
+    let initial_memory = if max_memory > 0 && initial_memory > max_memory {
+        max_memory
+    } else {
+        initial_memory
+    };
+
+    unsafe {
+        GC_MEMORY_LIMIT = max_memory;
+        GC_INITIAL_MEMORY = initial_memory;
+        GC_OOM = false;
+        GC_EXTERNAL_BYTES = 0;
+
+        let base_threshold = if initial_memory > 0 {
+            initial_memory.max(GC_MIN_THRESHOLD)
+        } else if max_memory > 0 {
+            max_memory.min(DEFAULT_ALLOC_THRESHOLD).max(GC_MIN_THRESHOLD)
+        } else {
+            DEFAULT_ALLOC_THRESHOLD
+        };
+        ALLOC_THRESHOLD = base_threshold;
+    }
+}
+
+fn enforce_memory_limit(size: usize) -> bool {
+    let limit = unsafe { GC_MEMORY_LIMIT };
+    if limit == 0 {
+        unsafe {
+            GC_OOM = false;
+        }
+        return true;
+    }
+
+    let projected = tracked_heap_bytes().saturating_add(size);
+    let soft_limit = limit.saturating_sub(MEM_LIMIT_SOFT_SLACK.min(limit));
+    if projected >= soft_limit {
+        gc_collect();
+        if tracked_heap_bytes().saturating_add(size) <= limit {
+            unsafe {
+                GC_OOM = false;
+            }
+            return true;
+        }
+
+        unsafe {
+            if !GC_OOM {
+                eprintln!("Out of memory: allocation ({size} bytes) exceeds configured memory limit {limit}");
+            }
+            GC_OOM = true;
+            crate::vm::mog_request_interrupt();
+        }
+        return false;
+    }
+
+    unsafe {
+        GC_OOM = false;
+    }
+    true
+}
+
+pub(crate) fn gc_reserve_external_memory(size: usize) -> bool {
+    if size == 0 {
+        return true;
+    }
+
+    if !enforce_memory_limit(size) {
+        return false;
+    }
+
+    unsafe {
+        GC_EXTERNAL_BYTES = GC_EXTERNAL_BYTES.saturating_add(size);
+    }
+    true
+}
+
+pub(crate) fn gc_release_external_memory(size: usize) {
+    if size == 0 {
+        return;
+    }
+
+    unsafe {
+        GC_EXTERNAL_BYTES = GC_EXTERNAL_BYTES.saturating_sub(size);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -368,6 +522,23 @@ fn is_large_block(block: *const Block) -> bool {
     unsafe { (*block).size as usize >= LARGE_OBJECT_THRESHOLD }
 }
 
+fn mark_out_of_memory(size: usize) {
+    unsafe {
+        let limit = GC_MEMORY_LIMIT;
+        if !GC_OOM {
+            if limit == 0 {
+                eprintln!("Out of memory ({size} bytes)");
+            } else {
+                eprintln!(
+                    "Out of memory: allocation ({size} bytes) exceeds configured memory limit {limit}"
+                );
+            }
+            GC_OOM = true;
+        }
+    }
+    crate::vm::mog_request_interrupt();
+}
+
 /// Allocate a large object via mmap.  The Block header is malloc'd separately
 /// (as a `LargeBlock`) while the user data lives in the mmap region.
 unsafe fn large_object_alloc(size: usize, kind: u32) -> *mut u8 {
@@ -381,8 +552,8 @@ unsafe fn large_object_alloc(size: usize, kind: u32) -> *mut u8 {
                 cache_clear();
                 mapping = page_alloc(size);
                 if mapping.is_null() {
-                    eprintln!("Out of memory (large object allocation)");
-                    process::exit(1);
+                    mark_out_of_memory(size);
+                    return ptr::null_mut();
                 }
             }
             actual_size = round_up_to_pages(size);
@@ -391,8 +562,8 @@ unsafe fn large_object_alloc(size: usize, kind: u32) -> *mut u8 {
         let lb = libc::malloc(size_of::<LargeBlock>()) as *mut LargeBlock;
         if lb.is_null() {
             cache_put_mapping(mapping, actual_size);
-            eprintln!("Out of memory (large object header)");
-            process::exit(1);
+            mark_out_of_memory(size);
+            return ptr::null_mut();
         }
 
         (*lb).base.kind = kind;
@@ -420,8 +591,8 @@ unsafe fn small_object_alloc(size: usize, kind: u32) -> *mut u8 {
             gc_collect();
             raw = libc::malloc(total) as *mut u8;
             if raw.is_null() {
-                eprintln!("Out of memory");
-                process::exit(1);
+                mark_out_of_memory(size);
+                return ptr::null_mut();
             }
         }
 
@@ -662,10 +833,18 @@ unsafe fn gc_sweep() {
 #[unsafe(no_mangle)]
 pub extern "C" fn gc_init() {
     unsafe {
+        let max_memory = GC_MEMORY_LIMIT;
+        let initial_memory = GC_INITIAL_MEMORY;
         HEAP = ptr::null_mut();
         HEAP_SIZE = 0;
         ALLOC_COUNT = 0;
-        ALLOC_THRESHOLD = 1024 * 1024;
+        ALLOC_THRESHOLD = if initial_memory > 0 {
+            initial_memory.max(GC_MIN_THRESHOLD)
+        } else if max_memory > 0 {
+            max_memory.min(DEFAULT_ALLOC_THRESHOLD).max(GC_MIN_THRESHOLD)
+        } else {
+            DEFAULT_ALLOC_THRESHOLD
+        };
         GC_ALLOCATED_BYTES = 0;
         GC_LIVE_BYTES = 0;
         GC_TOTAL_COLLECTIONS = 0;
@@ -682,6 +861,8 @@ pub extern "C" fn gc_init() {
         GC_LAST_FREED = 0;
         GC_LAST_MARK_NS = 0;
         GC_LAST_SWEEP_NS = 0;
+        GC_OOM = false;
+        GC_EXTERNAL_BYTES = 0;
 
         (*std::ptr::addr_of_mut!(MARK_STACK)).init();
     }
@@ -699,6 +880,10 @@ pub extern "C" fn gc_alloc_closure(num_slots: usize) -> *mut u8 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn gc_alloc_kind(size: usize, kind: i32) -> *mut u8 {
+    if !enforce_memory_limit(size) {
+        return ptr::null_mut();
+    }
+
     let kind_u32 = kind as u32;
     let result = unsafe {
         if size >= LARGE_OBJECT_THRESHOLD {
@@ -730,7 +915,8 @@ pub extern "C" fn gc_push_frame() {
         let frame = libc::malloc(size_of::<GCFrame>()) as *mut GCFrame;
         if frame.is_null() {
             eprintln!("Out of memory (GC frame)");
-            process::exit(1);
+            crate::vm::mog_request_interrupt();
+            return;
         }
         (*frame).prev = CURRENT_FRAME;
         (*frame).count = 0;
@@ -880,5 +1066,116 @@ pub extern "C" fn gc_heap_size() -> usize {
 pub extern "C" fn gc_set_threshold(t: usize) {
     unsafe {
         ALLOC_THRESHOLD = t;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn configure_limits(max_memory: usize, initial_memory: usize) {
+        gc_set_memory_limits(max_memory, initial_memory);
+        gc_init();
+        crate::vm::mog_clear_interrupt();
+    }
+
+    #[test]
+    fn gc_collects_unreachable_memory_before_hitting_limit() {
+        configure_limits(200 * 1024, 180 * 1024);
+
+        let first = gc_alloc(140_000);
+        assert!(!first.is_null(), "first allocation should succeed");
+
+        let second = gc_alloc(60_000);
+        assert!(
+            !second.is_null(),
+            "second allocation should succeed after GC reclaimed unreachable bytes"
+        );
+        assert_eq!(
+            crate::vm::mog_interrupt_requested(),
+            0,
+            "allocation should be throttled, not an OOM interrupt"
+        );
+        assert_eq!(
+            gc_heap_size(),
+            60_000,
+            "first unreachable allocation should be reclaimed before second allocation"
+        );
+
+        gc_shutdown();
+    }
+
+    #[test]
+    fn gc_reports_interrupt_when_reclaim_fails_and_limit_is_exceeded() {
+        configure_limits(200 * 1024, 180 * 1024);
+
+        gc_push_frame();
+        let mut live = gc_alloc(1024);
+        assert!(!live.is_null(), "rooted allocation should succeed");
+        gc_add_root(&mut live);
+        for _ in 0..64 {
+            assert!(
+                !gc_alloc(1024).is_null(),
+                "scratch allocations should remain available"
+            );
+        }
+
+        let blocked = gc_alloc(200 * 1024);
+        assert!(
+            blocked.is_null(),
+            "allocation should fail when GC cannot reclaim enough memory"
+        );
+        assert_eq!(
+            gc_heap_size(),
+            1024,
+            "rooted allocation should remain after reclaim"
+        );
+        assert_eq!(
+            crate::vm::mog_interrupt_requested(),
+            1,
+            "OOM should raise the interrupt flag instead of aborting the process"
+        );
+
+        gc_pop_frame();
+        gc_shutdown();
+    }
+
+    #[test]
+    fn gc_external_allocates_share_the_same_hard_limit() {
+        configure_limits(200 * 1024, 180 * 1024);
+
+        let first = gc_external_alloc(120 * 1024);
+        assert!(!first.is_null(), "first external allocation should succeed");
+
+        let second = gc_external_alloc(64 * 1024);
+        assert!(
+            !second.is_null(),
+            "second external allocation should succeed after GC check"
+        );
+
+        let blocked = gc_external_alloc(32 * 1024);
+        assert!(
+            blocked.is_null(),
+            "allocation beyond configured limit should fail"
+        );
+        assert_eq!(
+            crate::vm::mog_interrupt_requested(),
+            1,
+            "hard limit should convert OOM into an interrupt"
+        );
+
+        gc_shutdown();
+    }
+
+    #[test]
+    fn gc_initial_memory_is_clamped_to_max_when_too_large() {
+        configure_limits(100 * 1024, 10 * 1024 * 1024);
+        let clamped_initial = unsafe { std::ptr::read_volatile(std::ptr::addr_of!(GC_INITIAL_MEMORY)) };
+        assert_eq!(
+            clamped_initial,
+            100 * 1024,
+            "initial memory should be clamped when greater than max"
+        );
+        gc_shutdown();
     }
 }

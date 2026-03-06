@@ -113,6 +113,7 @@ module.exports = async function (eleventyConfig) {
 
   eleventyConfig.addPassthroughCopy("site/styles.css");
   eleventyConfig.addPassthroughCopy("site/CNAME");
+  eleventyConfig.addPassthroughCopy("site/assets");
   eleventyConfig.addWatchTarget("docs/guide.md");
 
   return {

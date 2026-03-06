@@ -2660,8 +2660,31 @@ impl QBECodeGen {
         let cont_lbl = self.fresh_label();
         self.emit(&format!("    jnz {}, {}, {}", flag, check_lbl, cont_lbl));
         self.emit(&format!("{}", check_lbl));
-        self.emit("    call $exit(w 99)");
+        self.emit("    call $mog_request_interrupt()");
+        self.emit_interrupt_return();
         self.emit(&format!("{}", cont_lbl));
+    }
+
+    fn emit_interrupt_return(&mut self) {
+        let return_type = self
+            .current_function_return_type
+            .as_ref()
+            .map(|ty| self.to_qbe_type(ty))
+            .unwrap_or("void");
+
+        // Async functions are generated as void-returning coroutines.
+        if self.in_async_function {
+            self.emit("    call $gc_pop_frame()");
+            self.emit("    ret");
+            return;
+        }
+
+        self.emit("    call $gc_pop_frame()");
+        match return_type {
+            "void" => self.emit("    ret"),
+            "d" => self.emit("    ret d 0"),
+            _ => self.emit("    ret 0"),
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -3133,10 +3156,21 @@ impl QBECodeGen {
         wrapper_ir.push_str("@start\n");
 
         // Allocate frame
+        let oom_lbl = self.fresh_label();
+        let frame_ok_lbl = self.fresh_label();
         wrapper_ir.push_str(&format!(
-            "    %init.frame =l call $malloc(l {})\n",
+            "    %init.frame =l call $gc_external_alloc(l {})\n",
             frame_size
         ));
+        wrapper_ir.push_str("    %init.frame_is_null =w ceql %init.frame, 0\n");
+        wrapper_ir.push_str(&format!(
+            "    jnz %init.frame_is_null, {}, {}\n",
+            oom_lbl, frame_ok_lbl
+        ));
+        wrapper_ir.push_str(&format!("{}\n", oom_lbl));
+        wrapper_ir.push_str("    call $mog_request_interrupt()\n");
+        wrapper_ir.push_str("    ret 0\n");
+        wrapper_ir.push_str(&format!("{}\n", frame_ok_lbl));
         // frame[0] = resume function pointer
         wrapper_ir.push_str(&format!("    storel ${}.coro, %init.frame\n", func_name));
         // frame[8] = state = -1 (initial)

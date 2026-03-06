@@ -81,6 +81,7 @@ pub struct MogLimits {
     pub max_memory: usize,
     pub max_cpu_ms: i32,
     pub max_stack_depth: i32,
+    pub initial_memory: usize,
 }
 
 // ---------------------------------------------------------------------------
@@ -143,6 +144,7 @@ pub extern "C" fn mog_vm_new() -> *mut u8 {
             max_memory: 0,
             max_cpu_ms: 0,
             max_stack_depth: 1024,
+            initial_memory: 0,
         },
     });
     Box::into_raw(vm) as *mut u8
@@ -581,7 +583,12 @@ pub extern "C" fn mog_vm_set_limits(vm: *mut u8, limits: *const MogLimits) {
     }
     unsafe {
         let vm = &mut *(vm as *mut MogVM);
-        vm.limits = *limits;
+        let mut new_limits = *limits;
+        if new_limits.max_memory > 0 && new_limits.initial_memory > new_limits.max_memory {
+            new_limits.initial_memory = new_limits.max_memory;
+        }
+        vm.limits = new_limits;
+        crate::gc::gc_set_memory_limits(vm.limits.max_memory, vm.limits.initial_memory);
         if vm.limits.max_cpu_ms > 0 {
             mog_arm_timeout(vm.limits.max_cpu_ms);
         }

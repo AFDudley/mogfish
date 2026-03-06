@@ -71,6 +71,18 @@ struct MogCapEntry {
 }
 unsafe impl Sync for MogCapEntry {}
 
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct MogLimits {
+    max_memory: usize,
+    max_cpu_ms: i32,
+    max_stack_depth: i32,
+    initial_memory: usize,
+}
+
+const GUEST_MAX_MEMORY: usize = 64 * 1024 * 1024;
+const GUEST_INITIAL_MEMORY: usize = 8 * 1024 * 1024;
+
 // ---------------------------------------------------------------------------
 // FFI: Mog runtime functions
 // ---------------------------------------------------------------------------
@@ -78,6 +90,7 @@ unsafe impl Sync for MogCapEntry {}
 unsafe extern "C" {
     fn mog_vm_new() -> *mut u8;
     fn mog_vm_set_global(vm: *mut u8);
+    fn mog_vm_set_limits(vm: *mut u8, limits: *const MogLimits);
     fn mog_vm_free(vm: *mut u8);
     fn mog_register_capability(vm: *mut u8, name: *const u8, entries: *const MogCapEntry) -> i32;
     fn gc_init();
@@ -242,10 +255,16 @@ fn main() {
     // -----------------------------------------------------------------------
     println!("\n--- Step 3: Setting up runtime (VM + async capability + event loop) ---");
     unsafe {
-        gc_init();
-
         let vm = mog_vm_new();
         assert!(!vm.is_null(), "failed to create VM");
+        let limits = MogLimits {
+            max_memory: GUEST_MAX_MEMORY,
+            max_cpu_ms: 0,
+            max_stack_depth: 1024,
+            initial_memory: GUEST_INITIAL_MEMORY,
+        };
+        mog_vm_set_limits(vm, &limits);
+        gc_init();
         mog_vm_set_global(vm);
 
         // Register our async capability
