@@ -167,5 +167,203 @@
         }
       })();
     </script>
+    <script>
+      (() => {
+        if (!window.matchMedia("(max-width: 760px)").matches) return;
+
+        const wrap = document.querySelector(".guide-wrap");
+        if (!wrap) return;
+
+        // Collect all h1s to define chapter boundaries
+        const h1s = Array.from(wrap.querySelectorAll("h1"));
+        if (h1s.length < 2) return;
+
+        // Build chapters: each chapter is {id, title, html (string)}
+        // We store HTML strings so we can swap DOM content without keeping 40k nodes alive
+        const chapters = [];
+        for (let i = 0; i < h1s.length; i++) {
+          const h1 = h1s[i];
+          const nodes = [];
+          let sib = h1;
+          while (sib) {
+            const next = sib.nextSibling;
+            if (sib !== h1 && sib.nodeType === 1 && sib.tagName === "H1") break;
+            nodes.push(sib);
+            sib = next;
+          }
+          const frag = document.createDocumentFragment();
+          nodes.forEach(n => frag.appendChild(n));
+          const tmp = document.createElement("div");
+          tmp.appendChild(frag);
+          chapters.push({ id: h1.id, title: h1.textContent.trim(), html: tmp.innerHTML });
+        }
+
+        // Clear the wrap
+        wrap.innerHTML = "";
+
+        // Build TOC data from chapters and their h2/h3 sub-headings
+        function parseToc(html) {
+          const tmp = document.createElement("div");
+          tmp.innerHTML = html;
+          const items = [];
+          tmp.querySelectorAll("h2, h3").forEach(h => {
+            items.push({ id: h.id, title: h.textContent.trim(), level: h.tagName === "H2" ? 2 : 3 });
+          });
+          return items;
+        }
+
+        const tocData = chapters.map((ch, i) => ({
+          index: i,
+          id: ch.id,
+          title: ch.title,
+          subs: parseToc(ch.html)
+        }));
+
+        // Add hamburger button to header
+        const header = document.querySelector(".site-header .site-shell");
+        const hamburger = document.createElement("button");
+        hamburger.className = "mob-hamburger";
+        hamburger.setAttribute("aria-label", "Open table of contents");
+        hamburger.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>';
+        header.insertBefore(hamburger, header.firstChild);
+
+        // Build overlay
+        const overlay = document.createElement("div");
+        overlay.className = "mob-toc-overlay";
+        const drawer = document.createElement("div");
+        drawer.className = "mob-toc-drawer";
+        const drawerHeader = document.createElement("div");
+        drawerHeader.className = "mob-toc-header";
+        drawerHeader.innerHTML = '<span>Contents</span><button class="mob-toc-close" aria-label="Close">&times;</button>';
+        drawer.appendChild(drawerHeader);
+
+        const tocList = document.createElement("ol");
+        tocList.className = "mob-toc-list";
+        tocData.forEach(ch => {
+          const li = document.createElement("li");
+          li.className = "mob-toc-ch";
+          li.dataset.chapterIndex = ch.index;
+          const a = document.createElement("a");
+          a.href = "#";
+          a.textContent = ch.title;
+          a.dataset.chapterIndex = ch.index;
+          a.dataset.scrollTo = "";
+          li.appendChild(a);
+          tocList.appendChild(li);
+
+          ch.subs.forEach(sub => {
+            const sli = document.createElement("li");
+            sli.className = sub.level === 2 ? "mob-toc-sub" : "mob-toc-sub3";
+            sli.dataset.chapterIndex = ch.index;
+            const sa = document.createElement("a");
+            sa.href = "#";
+            sa.textContent = sub.title;
+            sa.dataset.chapterIndex = ch.index;
+            sa.dataset.scrollTo = sub.id;
+            sli.appendChild(sa);
+            tocList.appendChild(sli);
+          });
+        });
+        drawer.appendChild(tocList);
+        overlay.appendChild(drawer);
+        document.body.appendChild(overlay);
+
+        // State
+        let currentIndex = 0;
+
+        function showChapter(index, scrollToId) {
+          if (index < 0 || index >= chapters.length) return;
+          currentIndex = index;
+
+          // Swap chapter HTML
+          wrap.innerHTML = chapters[index].html;
+
+          // Add next-chapter link
+          if (index < chapters.length - 1) {
+            const next = chapters[index + 1];
+            const link = document.createElement("a");
+            link.className = "mob-next-chapter";
+            link.href = "#";
+            link.innerHTML = '<div class="mob-next-chapter-label">Next</div><div class="mob-next-chapter-title">' +
+              next.title.replace(/</g, "&lt;") + '</div>';
+            link.addEventListener("click", e => {
+              e.preventDefault();
+              showChapter(index + 1);
+            });
+            wrap.appendChild(link);
+          }
+
+          // Highlight active chapter in TOC
+          tocList.querySelectorAll(".mob-toc-active").forEach(el => el.classList.remove("mob-toc-active"));
+          tocList.querySelectorAll("[data-chapter-index='" + index + "']").forEach(el => {
+            if (el.tagName === "LI") el.classList.add("mob-toc-active");
+          });
+
+          // Scroll to target or top
+          if (scrollToId) {
+            requestAnimationFrame(() => {
+              const target = document.getElementById(scrollToId);
+              if (target) target.scrollIntoView({ behavior: "auto" });
+              else window.scrollTo(0, 0);
+            });
+          } else {
+            window.scrollTo(0, 0);
+          }
+
+          // Update URL
+          history.replaceState(null, "", "#" + chapters[index].id);
+        }
+
+        // TOC click handler
+        tocList.addEventListener("click", e => {
+          const a = e.target.closest("a");
+          if (!a) return;
+          e.preventDefault();
+          const idx = parseInt(a.dataset.chapterIndex, 10);
+          const scrollTo = a.dataset.scrollTo || "";
+          closeOverlay();
+          showChapter(idx, scrollTo || null);
+        });
+
+        // Hamburger open/close
+        function openOverlay() {
+          overlay.classList.add("is-open");
+          document.body.style.overflow = "hidden";
+          // Scroll active item into view
+          const active = tocList.querySelector(".mob-toc-active");
+          if (active) active.scrollIntoView({ block: "center" });
+        }
+
+        function closeOverlay() {
+          overlay.classList.remove("is-open");
+          document.body.style.overflow = "";
+        }
+
+        hamburger.addEventListener("click", openOverlay);
+        overlay.addEventListener("click", e => {
+          if (e.target === overlay) closeOverlay();
+        });
+        drawerHeader.querySelector(".mob-toc-close").addEventListener("click", closeOverlay);
+
+        // Determine initial chapter from URL hash
+        let startIndex = 0;
+        let startScroll = null;
+        const hash = window.location.hash.slice(1);
+        if (hash) {
+          for (let i = 0; i < tocData.length; i++) {
+            if (tocData[i].id === hash) { startIndex = i; break; }
+            for (const sub of tocData[i].subs) {
+              if (sub.id === hash) { startIndex = i; startScroll = hash; break; }
+            }
+            if (startScroll) break;
+          }
+        }
+
+        showChapter(startIndex, startScroll);
+
+        // Disable the desktop scrollspy on mobile (it already ran, but prevent further updates)
+        window.removeEventListener("scroll", window.__mogScrollspy);
+      })();
+    </script>
   </body>
 </html>
