@@ -14,6 +14,5 @@ mod tensor;
 mod convert;
 mod result_opt;
 mod vm;
-mod async_rt;
 mod posix;
 mod plugin;

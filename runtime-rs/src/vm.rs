@@ -717,3 +717,8 @@ fn cstr_eq(a: *const u8, b: *const u8) -> bool {
     }
     unsafe { libc::strcmp(a as *const libc::c_char, b as *const libc::c_char) == 0 }
 }
+
+// Keep async runtime symbols in this module to avoid an extra runtime split.
+// This keeps the async/event-loop surface in the same translation unit as the
+// core VM entrypoints and ABI symbols.
+include!("vm_async_rt.rs");
