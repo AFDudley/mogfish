@@ -95,15 +95,10 @@
 
           const li = activeLink.closest(".guide-toc-item");
           if (li && tocContainer) {
-            const linkRect = li.getBoundingClientRect();
-            const containerRect = tocContainer.getBoundingClientRect();
             const pad = 10;
-
-            if (linkRect.top < containerRect.top + pad) {
-              tocContainer.scrollTop -= containerRect.top + pad - linkRect.top;
-            } else if (linkRect.bottom > containerRect.bottom - pad) {
-              tocContainer.scrollTop += linkRect.bottom - (containerRect.bottom - pad);
-            }
+            const maxScroll = tocContainer.scrollHeight - tocContainer.clientHeight;
+            const nextTop = li.offsetTop - pad;
+            tocContainer.scrollTop = Math.max(0, Math.min(maxScroll, Math.round(nextTop)));
           }
         }
 
@@ -159,7 +154,7 @@
 
               const maxScroll = tocContainer.scrollHeight - tocContainer.clientHeight;
               event.preventDefault();
-              tocContainer.scrollTop = Math.max(0, Math.min(maxScroll, tocContainer.scrollTop + delta));
+              tocContainer.scrollTop = Math.round(Math.max(0, Math.min(maxScroll, tocContainer.scrollTop + delta)));
             },
             { passive: false }
           );
