@@ -18,6 +18,9 @@ title: The Mog Language Guide
     </ol>
   </details>
   <article id="guide" class="guide-wrap">
-    {{ guideHtml | safe }}
+    <noscript><p>This guide requires JavaScript to display.</p></noscript>
+    {% for ch in guideChapters %}
+    <template class="guide-chapter" data-chapter-id="{{ ch.id }}" data-chapter-title="{{ ch.title }}">{{ ch.html | safe }}</template>
+    {% endfor %}
   </article>
 </section>

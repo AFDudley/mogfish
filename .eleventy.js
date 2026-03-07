@@ -82,7 +82,26 @@ function buildDocumentArtifacts(markdown, mdRenderer) {
   }
 
   const guideHtml = mdRenderer.renderer.render(tokens, mdRenderer.options, {});
-  return { guideHtml, guideToc };
+
+  // Split HTML into chapters at each <h1> boundary
+  const guideChapters = [];
+  const h1Regex = /<h1\s[^>]*id="([^"]*)"[^>]*>(.*?)<\/h1>/g;
+  const h1Matches = [];
+  let m;
+  while ((m = h1Regex.exec(guideHtml)) !== null) {
+    h1Matches.push({ index: m.index, id: m[1], title: m[2].replace(/<[^>]+>/g, "").trim() });
+  }
+  for (let i = 0; i < h1Matches.length; i++) {
+    const start = h1Matches[i].index;
+    const end = i + 1 < h1Matches.length ? h1Matches[i + 1].index : guideHtml.length;
+    guideChapters.push({
+      id: h1Matches[i].id,
+      title: h1Matches[i].title,
+      html: guideHtml.slice(start, end)
+    });
+  }
+
+  return { guideHtml, guideToc, guideChapters };
 }
 
 module.exports = async function (eleventyConfig) {
@@ -207,6 +226,11 @@ module.exports = async function (eleventyConfig) {
   eleventyConfig.addGlobalData("guideToc", async () => {
     const { guideToc } = await getGuideArtifacts();
     return guideToc;
+  });
+
+  eleventyConfig.addGlobalData("guideChapters", async () => {
+    const { guideChapters } = await getGuideArtifacts();
+    return guideChapters;
   });
 
   eleventyConfig.addPassthroughCopy("site/styles.css");
