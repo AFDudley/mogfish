@@ -53,6 +53,8 @@ fn now_ns() -> u64 {
 const MOG_FUTURE_PENDING: i32 = 0;
 const MOG_FUTURE_READY: i32 = 1;
 const MOG_FUTURE_ERROR: i32 = 2;
+const ERR_FUTURE_ERROR: i64 = -1;
+const ERR_ALL_RESULT_ARRAY_OOM: i64 = -2;
 
 // ---------------------------------------------------------------------------
 // MogFuture — matches the C layout exactly.
@@ -277,7 +279,8 @@ pub extern "C" fn mog_future_complete(f: *mut u8, value: i64) {
                         let parent_ptr = future.parent as *mut u8;
                         let array_ptr = build_all_results_array(sub_results_ptr, parent.sub_count);
                         if array_ptr.is_null() {
-                            mog_future_set_error(parent_ptr, -1);
+                            crate::vm::mog_request_interrupt();
+                            mog_future_set_error(parent_ptr, ERR_ALL_RESULT_ARRAY_OOM);
                             return;
                         }
                         parent.result = array_ptr as i64;
@@ -1169,7 +1172,7 @@ pub extern "C" fn mog_all(futures: *const *mut u8, count: i32) -> *mut u8 {
             Some(bytes) => bytes,
             None => {
                 crate::vm::mog_request_interrupt();
-                mog_future_set_error(parent_ptr, -1);
+                mog_future_set_error(parent_ptr, ERR_FUTURE_ERROR);
                 return parent_ptr;
             }
         };
@@ -1177,7 +1180,7 @@ pub extern "C" fn mog_all(futures: *const *mut u8, count: i32) -> *mut u8 {
             Some(bytes) => bytes,
             None => {
                 crate::vm::mog_request_interrupt();
-                mog_future_set_error(parent_ptr, -1);
+                mog_future_set_error(parent_ptr, ERR_FUTURE_ERROR);
                 return parent_ptr;
             }
         };
@@ -1185,14 +1188,14 @@ pub extern "C" fn mog_all(futures: *const *mut u8, count: i32) -> *mut u8 {
         let sub_futures = gc_external_alloc(sub_futures_bytes) as *mut *mut MogFuture;
         if sub_futures.is_null() {
             crate::vm::mog_request_interrupt();
-            mog_future_set_error(parent_ptr, -1);
+            mog_future_set_error(parent_ptr, ERR_FUTURE_ERROR);
             return parent_ptr;
         }
         let sub_results = gc_external_alloc(sub_results_bytes) as *mut i64;
         if sub_results.is_null() {
             gc_external_free(sub_futures as *mut u8);
             crate::vm::mog_request_interrupt();
-            mog_future_set_error(parent_ptr, -1);
+            mog_future_set_error(parent_ptr, ERR_FUTURE_ERROR);
             return parent_ptr;
         }
         ptr::write_bytes(sub_futures as *mut u8, 0, sub_futures_bytes);
@@ -1218,7 +1221,8 @@ pub extern "C" fn mog_all(futures: *const *mut u8, count: i32) -> *mut u8 {
         if already_done >= count {
             let array_ptr = build_all_results_array(parent.sub_results, count);
             if array_ptr.is_null() {
-                mog_future_set_error(parent_ptr, -1);
+                crate::vm::mog_request_interrupt();
+                mog_future_set_error(parent_ptr, ERR_ALL_RESULT_ARRAY_OOM);
                 return parent_ptr;
             }
             parent.result = array_ptr as i64;
@@ -1272,6 +1276,7 @@ mod tests {
     fn mog_all_returns_indexable_array_results() {
         unsafe {
             crate::gc::gc_init();
+            crate::vm::mog_clear_interrupt();
             let first = mog_future_new();
             let second = mog_future_new();
             assert_ne!(first, ptr::null_mut());
@@ -1295,5 +1300,60 @@ mod tests {
             mog_future_free(first);
             mog_future_free(second);
         }
+    }
+
+    #[test]
+    fn mog_all_distinguishes_array_allocation_oom_from_generic_future_error() {
+        let mut hit_distinct_error = false;
+        for max_memory in 64..=8192usize {
+            unsafe {
+                crate::gc::gc_set_memory_limits(max_memory, max_memory);
+                crate::gc::gc_init();
+                crate::vm::mog_clear_interrupt();
+
+                let first = mog_future_new();
+                let second = mog_future_new();
+                if first.is_null() || second.is_null() {
+                    if !first.is_null() {
+                        mog_future_free(first);
+                    }
+                    if !second.is_null() {
+                        mog_future_free(second);
+                    }
+                    continue;
+                }
+
+                mog_future_complete(first, 45);
+                mog_future_complete(second, 65);
+
+                let futures = [first, second];
+                let parent = mog_all(futures.as_ptr(), 2);
+                if parent.is_null() {
+                    mog_future_free(first);
+                    mog_future_free(second);
+                    continue;
+                }
+
+                assert_eq!(mog_future_is_ready(parent), 1);
+                let result = mog_future_get_result(parent);
+
+                if result == ERR_ALL_RESULT_ARRAY_OOM {
+                    hit_distinct_error = true;
+                    mog_future_free(parent);
+                    mog_future_free(first);
+                    mog_future_free(second);
+                    break;
+                }
+
+                mog_future_free(parent);
+                mog_future_free(first);
+                mog_future_free(second);
+            }
+        }
+
+        assert!(
+            hit_distinct_error,
+            "expected all() to surface array allocation failure with ERR_ALL_RESULT_ARRAY_OOM"
+        );
     }
 }
