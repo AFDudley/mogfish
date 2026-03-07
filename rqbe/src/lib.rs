@@ -1,4 +1,5 @@
 pub mod alias;
+pub mod amd64;
 pub mod arm64;
 pub mod cfg;
 pub mod compile;

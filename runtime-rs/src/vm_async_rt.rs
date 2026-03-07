@@ -575,7 +575,11 @@ extern "C" fn mog_timer_sentinel(_vm: *mut u8, _args: *const MogValue, _nargs: i
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mog_timer_set_timeout(_vm: *mut u8, args: *const MogValue, nargs: i32) -> MogValue {
+pub extern "C" fn mog_timer_set_timeout(
+    _vm: *mut u8,
+    args: *const MogValue,
+    nargs: i32,
+) -> MogValue {
     if nargs != 1 || args.is_null() {
         return mog_error(ERR_TIMER_MISSING_ARG.as_ptr());
     }
@@ -683,8 +687,17 @@ pub extern "C" fn mog_coro_resume(handle: *mut u8) {
         return;
     }
     unsafe {
-        let fn_ptr: fn(*mut u8) = std::mem::transmute(*(handle as *const usize));
-        fn_ptr(handle);
+        let fn_ptr: extern "C" fn(*mut u8) = std::mem::transmute(*(handle as *const usize));
+        let rc = crate::stack_guard::mog_protected_call_coro(fn_ptr, handle);
+        if rc < 0 {
+            // Stack overflow during coroutine resume — print diagnostic and abort.
+            libc::write(
+                2,
+                b"mog: stack overflow in async coroutine\n".as_ptr() as *const libc::c_void,
+                39,
+            );
+            libc::_exit(2);
+        }
     }
 }
 
@@ -878,13 +891,8 @@ pub extern "C" fn mog_loop_run(loop_ptr: *mut u8) {
                         }
                     }
                 } else {
-                    let nready = libc::select(
-                        0,
-                        ptr::null_mut(),
-                        ptr::null_mut(),
-                        ptr::null_mut(),
-                        tv_ptr,
-                    );
+                    let nready =
+                        libc::select(0, ptr::null_mut(), ptr::null_mut(), ptr::null_mut(), tv_ptr);
                     if nready == -1 {
                         crate::vm::mog_request_interrupt();
                     }
@@ -998,7 +1006,13 @@ pub extern "C" fn mog_loop_step(loop_ptr: *mut u8) -> i32 {
                     &mut tv,
                 )
             } else {
-                libc::select(0, ptr::null_mut(), ptr::null_mut(), ptr::null_mut(), &mut tv)
+                libc::select(
+                    0,
+                    ptr::null_mut(),
+                    ptr::null_mut(),
+                    ptr::null_mut(),
+                    &mut tv,
+                )
             };
 
             if nready > 0 {
@@ -1024,7 +1038,9 @@ pub extern "C" fn mog_loop_step(loop_ptr: *mut u8) -> i32 {
                         let watcher_fd = (*watcher).fd;
                         let watcher_future = (*watcher).future as *mut u8;
 
-                        if watcher_fd == libc::STDIN_FILENO && ((*watcher).events & MOG_FD_READ != 0) {
+                        if watcher_fd == libc::STDIN_FILENO
+                            && ((*watcher).events & MOG_FD_READ != 0)
+                        {
                             let mut buf = [0u8; 4096];
                             let result = libc::fgets(
                                 buf.as_mut_ptr() as *mut libc::c_char,
@@ -1080,7 +1096,11 @@ pub extern "C" fn mog_loop_step(loop_ptr: *mut u8) -> i32 {
 
         if did_work {
             1
-        } else if el.timers.is_null() && el.ready_head.is_null() && el.watchers.is_null() && el.pending_count <= 0 {
+        } else if el.timers.is_null()
+            && el.ready_head.is_null()
+            && el.watchers.is_null()
+            && el.pending_count <= 0
+        {
             0
         } else {
             1
@@ -1171,14 +1191,15 @@ pub extern "C" fn mog_all(futures: *const *mut u8, count: i32) -> *mut u8 {
     unsafe {
         let parent = &mut *(parent_ptr as *mut MogFuture);
 
-        let sub_futures_bytes = match (count as usize).checked_mul(std::mem::size_of::<*mut MogFuture>()) {
-            Some(bytes) => bytes,
-            None => {
-                crate::vm::mog_request_interrupt();
-                mog_future_set_error(parent_ptr, ERR_FUTURE_ERROR);
-                return parent_ptr;
-            }
-        };
+        let sub_futures_bytes =
+            match (count as usize).checked_mul(std::mem::size_of::<*mut MogFuture>()) {
+                Some(bytes) => bytes,
+                None => {
+                    crate::vm::mog_request_interrupt();
+                    mog_future_set_error(parent_ptr, ERR_FUTURE_ERROR);
+                    return parent_ptr;
+                }
+            };
         let sub_results_bytes = match (count as usize).checked_mul(std::mem::size_of::<i64>()) {
             Some(bytes) => bytes,
             None => {

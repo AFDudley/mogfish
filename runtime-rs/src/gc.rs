@@ -324,7 +324,9 @@ pub(crate) fn gc_set_memory_limits(max_memory: usize, initial_memory: usize) {
         let base_threshold = if initial_memory > 0 {
             initial_memory.max(GC_MIN_THRESHOLD)
         } else if max_memory > 0 {
-            max_memory.min(DEFAULT_ALLOC_THRESHOLD).max(GC_MIN_THRESHOLD)
+            max_memory
+                .min(DEFAULT_ALLOC_THRESHOLD)
+                .max(GC_MIN_THRESHOLD)
         } else {
             DEFAULT_ALLOC_THRESHOLD
         };
@@ -841,7 +843,9 @@ pub extern "C" fn gc_init() {
         ALLOC_THRESHOLD = if initial_memory > 0 {
             initial_memory.max(GC_MIN_THRESHOLD)
         } else if max_memory > 0 {
-            max_memory.min(DEFAULT_ALLOC_THRESHOLD).max(GC_MIN_THRESHOLD)
+            max_memory
+                .min(DEFAULT_ALLOC_THRESHOLD)
+                .max(GC_MIN_THRESHOLD)
         } else {
             DEFAULT_ALLOC_THRESHOLD
         };
@@ -866,6 +870,9 @@ pub extern "C" fn gc_init() {
 
         (*std::ptr::addr_of_mut!(MARK_STACK)).init();
     }
+
+    // Initialize stack guard page protection (idempotent — safe to call multiple times)
+    crate::stack_guard::mog_stack_guard_init();
 }
 
 #[unsafe(no_mangle)]
@@ -1171,7 +1178,11 @@ mod tests {
         gc_pop_frame();
         crate::vm::mog_clear_interrupt();
         gc_collect();
-        assert_eq!(gc_heap_size(), 0, "scoping rooted allocations should release tracked heap bytes");
+        assert_eq!(
+            gc_heap_size(),
+            0,
+            "scoping rooted allocations should release tracked heap bytes"
+        );
 
         let recovered = gc_alloc(32 * 1024);
         assert!(
@@ -1189,8 +1200,14 @@ mod tests {
 
         let external_a = gc_external_alloc(120 * 1024);
         let external_b = gc_external_alloc(64 * 1024);
-        assert!(!external_a.is_null(), "first external allocation should succeed");
-        assert!(!external_b.is_null(), "second external allocation should succeed");
+        assert!(
+            !external_a.is_null(),
+            "first external allocation should succeed"
+        );
+        assert!(
+            !external_b.is_null(),
+            "second external allocation should succeed"
+        );
 
         let blocked = gc_external_alloc(32 * 1024);
         assert!(
@@ -1345,7 +1362,8 @@ mod tests {
     fn gc_initial_memory_is_clamped_to_max_when_too_large() {
         let _lock = lock_gc_runtime();
         configure_limits(100 * 1024, 10 * 1024 * 1024);
-        let clamped_initial = unsafe { std::ptr::read_volatile(std::ptr::addr_of!(GC_INITIAL_MEMORY)) };
+        let clamped_initial =
+            unsafe { std::ptr::read_volatile(std::ptr::addr_of!(GC_INITIAL_MEMORY)) };
         assert_eq!(
             clamped_initial,
             100 * 1024,
@@ -1360,7 +1378,10 @@ mod tests {
         configure_limits(128 * 1024, 64 * 1024);
 
         let blocked = gc_alloc(usize::MAX);
-        assert!(blocked.is_null(), "oversized allocation should fail cleanly");
+        assert!(
+            blocked.is_null(),
+            "oversized allocation should fail cleanly"
+        );
         assert_eq!(
             tracked_bytes(),
             0,

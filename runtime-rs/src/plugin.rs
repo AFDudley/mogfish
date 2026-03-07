@@ -343,7 +343,17 @@ pub extern "C" fn mog_load_plugin_sandboxed(
         //
         // The spec says mog_load_plugin_sandboxed takes (path, allowed_caps, num_caps)
         // without a VM. We call init with NULL; well-behaved plugins handle this.
-        let result = init_fn(ptr::null_mut());
+        // Transmute to safe fn pointer — we're already in an unsafe block and the
+        // plugin init function is being called with a valid (null) argument.
+        let safe_init: extern "C" fn(*mut u8) -> i32 = std::mem::transmute(init_fn);
+        let result = crate::stack_guard::mog_protected_call_void(safe_init, ptr::null_mut());
+        if result < 0 {
+            // Stack overflow during plugin init
+            set_plugin_error_fmt(&["stack overflow during plugin init"]);
+            libc::dlclose(handle);
+            libc::free(plugin as *mut libc::c_void);
+            return ptr::null_mut();
+        }
         if result != 0 {
             set_plugin_error_fmt(&["plugin init returned error code"]);
             libc::dlclose(handle);
@@ -414,39 +424,73 @@ pub extern "C" fn mog_plugin_call(
                     };
                 }
 
-                // Call with the appropriate number of arguments
-                type Fn0 = unsafe extern "C" fn() -> i64;
-                type Fn1 = unsafe extern "C" fn(i64) -> i64;
-                type Fn2 = unsafe extern "C" fn(i64, i64) -> i64;
-                type Fn3 = unsafe extern "C" fn(i64, i64, i64) -> i64;
-                type Fn4 = unsafe extern "C" fn(i64, i64, i64, i64) -> i64;
-
+                // Call with the appropriate number of arguments, routed through
+                // the stack guard's protected call mechanism.
                 let fp = export.func_ptr;
-                let result: i64 = match nargs {
-                    0 => {
-                        let f: Fn0 = std::mem::transmute(fp);
-                        f()
-                    }
-                    1 => {
-                        let f: Fn1 = std::mem::transmute(fp);
-                        f(raw_args[0])
-                    }
-                    2 => {
-                        let f: Fn2 = std::mem::transmute(fp);
-                        f(raw_args[0], raw_args[1])
-                    }
-                    3 => {
-                        let f: Fn3 = std::mem::transmute(fp);
-                        f(raw_args[0], raw_args[1], raw_args[2])
-                    }
-                    4 => {
-                        let f: Fn4 = std::mem::transmute(fp);
-                        f(raw_args[0], raw_args[1], raw_args[2], raw_args[3])
-                    }
-                    _ => {
-                        return MogValue::error(b"too many arguments (max 4)\0".as_ptr());
-                    }
+
+                // Pack function pointer, args, and arity into a stack struct
+                // so we can route through mog_protected_call via a trampoline.
+                #[repr(C)]
+                struct PluginCallPack {
+                    func_ptr: *const u8,
+                    args: [i64; 4],
+                    nargs: i32,
+                }
+
+                let pack = PluginCallPack {
+                    func_ptr: fp,
+                    args: [raw_args[0], raw_args[1], raw_args[2], raw_args[3]],
+                    nargs,
                 };
+
+                extern "C" fn plugin_call_trampoline(pack_ptr: i64) -> i64 {
+                    unsafe {
+                        let pack = &*(pack_ptr as *const PluginCallPack);
+                        type Fn0 = unsafe extern "C" fn() -> i64;
+                        type Fn1 = unsafe extern "C" fn(i64) -> i64;
+                        type Fn2 = unsafe extern "C" fn(i64, i64) -> i64;
+                        type Fn3 = unsafe extern "C" fn(i64, i64, i64) -> i64;
+                        type Fn4 = unsafe extern "C" fn(i64, i64, i64, i64) -> i64;
+
+                        match pack.nargs {
+                            0 => {
+                                let f: Fn0 = std::mem::transmute(pack.func_ptr);
+                                f()
+                            }
+                            1 => {
+                                let f: Fn1 = std::mem::transmute(pack.func_ptr);
+                                f(pack.args[0])
+                            }
+                            2 => {
+                                let f: Fn2 = std::mem::transmute(pack.func_ptr);
+                                f(pack.args[0], pack.args[1])
+                            }
+                            3 => {
+                                let f: Fn3 = std::mem::transmute(pack.func_ptr);
+                                f(pack.args[0], pack.args[1], pack.args[2])
+                            }
+                            4 => {
+                                let f: Fn4 = std::mem::transmute(pack.func_ptr);
+                                f(pack.args[0], pack.args[1], pack.args[2], pack.args[3])
+                            }
+                            _ => 0, // unreachable — checked before
+                        }
+                    }
+                }
+
+                if nargs > 4 {
+                    return MogValue::error(b"too many arguments (max 4)\0".as_ptr());
+                }
+
+                let result = crate::stack_guard::mog_protected_call(
+                    plugin_call_trampoline,
+                    &pack as *const PluginCallPack as i64,
+                );
+
+                // Check for stack overflow sentinel
+                if result == i64::MIN && crate::stack_guard::mog_stack_overflow_occurred() != 0 {
+                    return MogValue::error(b"stack overflow in plugin call\0".as_ptr());
+                }
 
                 return MogValue::int(result);
             }

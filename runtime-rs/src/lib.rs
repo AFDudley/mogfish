@@ -4,15 +4,16 @@
 // function is `extern "C"` + `#[no_mangle]` so the QBE-generated assembly can
 // call it directly.
 
-mod gc;
-mod string_ops;
 mod array;
-mod map;
-mod print;
-mod math;
-mod tensor;
 mod convert;
-mod result_opt;
-mod vm;
-mod posix;
+mod gc;
+mod map;
+mod math;
 mod plugin;
+mod posix;
+mod print;
+mod result_opt;
+mod stack_guard;
+mod string_ops;
+mod tensor;
+mod vm;

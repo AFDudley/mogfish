@@ -3433,6 +3433,10 @@ impl QBECodeGen {
 
         let mut main_ir = String::from("export function w $main() {\n@start\n");
         main_ir.push_str("    call $gc_init()\n");
+        // gc_init already calls mog_stack_guard_init internally, but also
+        // emit an explicit call so standalone builds without the Rust runtime
+        // (or with a stub gc_init) still get stack protection.
+        main_ir.push_str("    call $mog_stack_guard_init()\n");
         main_ir.push_str("    call $gc_push_frame()\n");
         // Check if VM exists, create if not
         main_ir.push_str("    %vm.0 =l call $mog_vm_get_global()\n");
@@ -3448,13 +3452,20 @@ impl QBECodeGen {
         main_ir.push_str("    call $mog_register_posix_host(l %vm.1)\n");
 
         if is_async_main {
-            // Async main: create event loop, call program_user (returns future), run loop
+            // Async main: create event loop, call program_user (returns future), run loop.
+            // Route program_user through mog_protected_call_0 for stack protection.
             main_ir.push_str("    %loop =l call $mog_loop_new()\n");
             main_ir.push_str("    call $mog_loop_set_global(l %loop)\n");
             if has_program_fn {
                 main_ir.push_str("    call $mog_program()\n");
             }
-            main_ir.push_str("    %future =l call $program_user()\n");
+            // Call program_user via protected call (stack switch + guard page)
+            main_ir.push_str("    %prog_fn =l copy $program_user\n");
+            main_ir.push_str("    %future =l call $mog_protected_call_0(l %prog_fn)\n");
+            // Check for stack overflow via runtime flag (avoids emitting i64::MIN literal)
+            main_ir.push_str("    %async_overflow =w call $mog_stack_overflow_occurred()\n");
+            main_ir.push_str("    jnz %async_overflow, @stack_overflow, @async_ok\n");
+            main_ir.push_str("@async_ok\n");
             main_ir.push_str("    call $mog_loop_run(l %loop)\n");
             main_ir.push_str("    %ret =l call $mog_future_get_result(l %future)\n");
             main_ir.push_str("    call $mog_loop_free(l %loop)\n");
@@ -3468,7 +3479,13 @@ impl QBECodeGen {
             if self.function_types.contains_key("main")
                 || self.function_types.contains_key("program_user")
             {
-                main_ir.push_str("    %ret =l call $program_user()\n");
+                // Route program_user through mog_protected_call_0 for stack protection.
+                main_ir.push_str("    %prog_fn =l copy $program_user\n");
+                main_ir.push_str("    %ret =l call $mog_protected_call_0(l %prog_fn)\n");
+                // Check for stack overflow via runtime flag (avoids emitting i64::MIN literal)
+                main_ir.push_str("    %sync_overflow =w call $mog_stack_overflow_occurred()\n");
+                main_ir.push_str("    jnz %sync_overflow, @stack_overflow, @sync_ok\n");
+                main_ir.push_str("@sync_ok\n");
                 main_ir.push_str("    call $gc_pop_frame()\n");
                 main_ir.push_str("    %retw =w copy %ret\n");
                 main_ir.push_str("    ret %retw\n");
@@ -3476,6 +3493,16 @@ impl QBECodeGen {
                 main_ir.push_str("    call $gc_pop_frame()\n");
                 main_ir.push_str("    ret 0\n");
             }
+        }
+        // Stack overflow handler block — emitted when program_user is protected
+        let has_program_user = is_async_main
+            || self.function_types.contains_key("main")
+            || self.function_types.contains_key("program_user");
+        if has_program_user {
+            main_ir.push_str("@stack_overflow\n");
+            main_ir.push_str("    call $mog_stack_overflow_print()\n");
+            main_ir.push_str("    call $gc_pop_frame()\n");
+            main_ir.push_str("    ret 2\n");
         }
         main_ir.push_str("}\n\n");
         self.output.push_str(&main_ir);

@@ -10,6 +10,8 @@ fn main() {
     println!("cargo:rustc-link-arg=-Wl,-export_dynamic");
 
     // System libraries needed by the runtime
-    println!("cargo:rustc-link-lib=framework=System");
+    if cfg!(target_os = "macos") {
+        println!("cargo:rustc-link-lib=framework=System");
+    }
     println!("cargo:rustc-link-lib=m");
 }

@@ -16,12 +16,19 @@ use rqbe::Target;
 
 /// Build a Target suitable for the current platform.
 ///
-/// On macOS/arm64, this is the arm64-apple target.
+/// On macOS we default to Apple ARM64 when available, otherwise we use x86_64.
 fn make_target() -> &'static Target {
     if cfg!(target_os = "macos") {
-        &rqbe::arm64::T_ARM64_APPLE
+        #[cfg(target_arch = "x86_64")]
+        {
+            &rqbe::amd64::T_AMD64_APPLE
+        }
+        #[cfg(not(target_arch = "x86_64"))]
+        {
+            &rqbe::arm64::T_ARM64_APPLE
+        }
     } else {
-        &rqbe::arm64::T_ARM64
+        &rqbe::amd64::T_AMD64_SYSV
     }
 }
 
@@ -133,9 +140,16 @@ fn run_ssa_test(test_name: &str) {
     if let Some(first_line) = contents.lines().next() {
         if first_line.starts_with("# skip") {
             let targets: Vec<&str> = first_line.split_whitespace().skip(2).collect();
-            if targets.iter().any(|&t| t == "arm64_apple" || t == "arm64") {
+            let current = make_target().name;
+            if targets.iter().any(|&t| {
+                t == current
+                    || t == "amd64"
+                    && current.starts_with("amd64")
+                    || t == "arm64"
+                    && current.starts_with("arm64")
+            }) {
                 eprintln!(
-                    "Skipping test '{}' (not supported on arm64_apple)",
+                    "Skipping test '{}' (not supported on selected target)",
                     test_name
                 );
                 return;

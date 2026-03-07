@@ -58,6 +58,26 @@ impl OptLevel {
     }
 }
 
+fn default_qbe_target() -> &'static rqbe::Target {
+    #[cfg(target_os = "macos")]
+    {
+        #[cfg(target_arch = "x86_64")]
+        {
+            &rqbe::amd64::T_AMD64_APPLE
+        }
+
+        #[cfg(not(target_arch = "x86_64"))]
+        {
+            &rqbe::arm64::T_ARM64_APPLE
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        &rqbe::amd64::T_AMD64_SYSV
+    }
+}
+
 /// Options that control a single compilation.
 #[derive(Debug, Clone)]
 pub struct CompileOptions {
@@ -250,7 +270,7 @@ pub fn compile_to_binary(source: &str, options: &CompileOptions) -> Result<PathB
         .unwrap_or_else(|| tmp.join("a.out"));
 
     // --- QBE: IR → assembly (in-process via rqbe) ---------------------------
-    let asm = rqbe::compile(&result.ir, &rqbe::arm64::T_ARM64_APPLE)
+    let asm = rqbe::compile(&result.ir, default_qbe_target())
         .map_err(|e| vec![format!("QBE compilation failed: {e}")])?;
     fs::write(&asm_path, &asm).map_err(|e| vec![format!("failed to write assembly: {e}")])?;
 
@@ -388,7 +408,7 @@ pub fn compile_plugin(
         .unwrap_or_else(|| tmp.join(format!("lib{name}.{lib_ext}")));
 
     // --- QBE: IR → assembly (in-process via rqbe) ---------------------------
-    let asm = rqbe::compile(&result.ir, &rqbe::arm64::T_ARM64_APPLE)
+    let asm = rqbe::compile(&result.ir, default_qbe_target())
         .map_err(|e| vec![format!("QBE compilation failed: {e}")])?;
     fs::write(&asm_path, &asm).map_err(|e| vec![format!("failed to write assembly: {e}")])?;
 
@@ -398,33 +418,37 @@ pub fn compile_plugin(
         "as (assembler)",
     )?;
 
-    // --- create stub object for globals that need link-time addresses --------
-    // ARM64 ADRP+LDR addressing requires symbols to be resolvable at link
-    // time.  Global variables like `mog_interrupt_flag` can't be deferred via
-    // `-undefined dynamic_lookup`.  We create a tiny stub defining them so the
-    // linker can assign addresses; at runtime the host's actual definition
-    // takes priority because the plugin is loaded with RTLD_LOCAL.
-    let stub_c = tmp.join("_mog_stub.c");
-    let stub_o = tmp.join("_mog_stub.o");
-    fs::write(&stub_c, "volatile int mog_interrupt_flag = 0;\n")
-        .map_err(|e| vec![format!("failed to write stub: {e}")])?;
-    run_command(
-        Command::new(cc_command().get_program())
-            .arg("-c")
-            .arg("-fPIC")
-            .arg(&stub_c)
-            .arg("-o")
-            .arg(&stub_o),
-        "cc (compile stub)",
-    )?;
+    #[cfg(target_os = "macos")]
+    let stub_o = {
+        // ARM64 Mach-O needs a concrete definition for this TLS-less global at
+        // link time because the host resolves it differently than ELF.
+        let stub_c = tmp.join("_mog_stub.c");
+        let stub_o = tmp.join("_mog_stub.o");
+        fs::write(&stub_c, "volatile int mog_interrupt_flag = 0;\n")
+            .map_err(|e| vec![format!("failed to write stub: {e}")])?;
+        run_command(
+            Command::new(cc_command().get_program())
+                .arg("-c")
+                .arg("-fPIC")
+                .arg(&stub_c)
+                .arg("-o")
+                .arg(&stub_o),
+            "cc (compile stub)",
+        )?;
+        stub_o
+    };
 
     // --- linker: object → shared library -----------------------------------
     let mut link = cc_command();
     link.arg("-shared")
         .arg("-o")
         .arg(&lib_path)
-        .arg(&obj_path)
-        .arg(&stub_o);
+        .arg(&obj_path);
+
+    #[cfg(target_os = "macos")]
+    {
+        link.arg(&stub_o);
+    }
 
     #[cfg(target_os = "macos")]
     {
@@ -485,15 +509,6 @@ pub fn compile_plugin(
     {
         link.arg("-undefined").arg("dynamic_lookup");
         link.arg("-lSystem");
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        // On Linux, unresolved symbols in shared objects are resolved at load
-        // time by default, so no extra flag is needed.  Link the runtime as a
-        // fallback in case the host doesn't export the symbols.
-        if let Some(rt) = find_runtime_archive() {
-            link.arg(&rt);
-        }
     }
     link.arg("-lm");
 

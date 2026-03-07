@@ -2,7 +2,11 @@ use std::fmt;
 
 use crate::ir::{Fn, Target, Typ};
 use crate::parse::{self, ParseResult};
-use crate::{alias, arm64, cfg, copy, emit, fold, live, load, mem, regalloc, simpl, spill, ssa};
+use crate::{alias, amd64, arm64, cfg, copy, emit, fold, live, load, mem, regalloc, simpl, spill, ssa};
+
+fn is_amd64_target(target: &Target) -> bool {
+    target.name.starts_with("amd64")
+}
 
 /// Compilation error.
 #[derive(Debug)]
@@ -74,7 +78,11 @@ fn compile_fn(f: &mut Fn, target: &Target, typs: &[Typ], out: &mut String) {
 
     // ABI lowering pass 0: classify parameters and returns.
     dbglog!("abi0...");
-    arm64::abi0(f, target);
+    if is_amd64_target(target) {
+        amd64::abi0(f, target);
+    } else {
+        arm64::abi0(f, target);
+    }
 
     // Build CFG: RPO numbering, predecessor lists, use/def info.
     dbglog!("fillrpo...");
@@ -119,7 +127,11 @@ fn compile_fn(f: &mut Fn, target: &Target, typs: &[Typ], out: &mut String) {
 
     // ABI lowering pass 1: lower ABI-specific operations.
     dbglog!("abi1...");
-    arm64::abi1(f, target, typs);
+    if is_amd64_target(target) {
+        amd64::abi1(f, target, typs);
+    } else {
+        arm64::abi1(f, target, typs);
+    }
 
     // Simplification.
     dbglog!("simpl...");
@@ -131,7 +143,11 @@ fn compile_fn(f: &mut Fn, target: &Target, typs: &[Typ], out: &mut String) {
 
     // Instruction selection: lower IR ops to machine instructions.
     dbglog!("isel...");
-    arm64::isel(f, target);
+    if is_amd64_target(target) {
+        amd64::isel(f, target);
+    } else {
+        arm64::isel(f, target);
+    }
 
     // Prepare for register allocation.
     dbglog!("fillrpo2...");
@@ -174,6 +190,10 @@ fn compile_fn(f: &mut Fn, target: &Target, typs: &[Typ], out: &mut String) {
 
     // Emit assembly for this function.
     dbglog!("emitfn...");
-    arm64::emitfn(f, target, out);
+    if is_amd64_target(target) {
+        amd64::emitfn(f, target, out);
+    } else {
+        arm64::emitfn(f, target, out);
+    }
     dbglog!("=== compile_fn done ===");
 }

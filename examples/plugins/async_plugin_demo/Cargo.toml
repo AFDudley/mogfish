@@ -7,3 +7,8 @@ edition = "2024"
 mog = { path = "../../../compiler" }
 libloading = "0.8"
 blake3 = "1"
+
+[[bin]]
+name = "async_plugin_demo"
+path = "src/main.rs"
+test = false

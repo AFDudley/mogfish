@@ -10,7 +10,25 @@ use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int};
 use std::ptr;
 
-use crate::arm64::T_ARM64_APPLE;
+fn default_target() -> &'static crate::ir::Target {
+    #[cfg(target_os = "macos")]
+    {
+        #[cfg(target_arch = "x86_64")]
+        {
+            &crate::amd64::T_AMD64_APPLE
+        }
+
+        #[cfg(not(target_arch = "x86_64"))]
+        {
+            &crate::arm64::T_ARM64_APPLE
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        &crate::amd64::T_AMD64_SYSV
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -62,7 +80,7 @@ fn sdk_path() -> Option<String> {
 // Public FFI
 // ---------------------------------------------------------------------------
 
-/// Compile QBE IL to ARM64 assembly.
+/// Compile QBE IL to host-target assembly.
 ///
 /// Returns a heap-allocated C string (caller must free with `mog_qbe_free`),
 /// or `NULL` on error.
@@ -74,7 +92,7 @@ pub extern "C" fn mog_qbe_compile(input: *const u8, input_len: c_int) -> *mut c_
 
     let src = unsafe { slice_from_raw(input, input_len) };
 
-    match crate::compile(src, &T_ARM64_APPLE) {
+    match crate::compile(src, default_target()) {
         Ok(asm) => match CString::new(asm) {
             Ok(c) => c.into_raw(),
             Err(_) => ptr::null_mut(), // interior NUL — shouldn't happen
@@ -98,7 +116,7 @@ pub extern "C" fn mog_qbe_free(ptr: *mut c_char) {
 
 /// Compile QBE IL to an object file on disk.
 ///
-/// 1. Compile QBE IL → ARM64 assembly via `rqbe::compile`.
+/// 1. Compile QBE IL via `rqbe::compile`.
 /// 2. Write assembly to a temp `.s` file.
 /// 3. Invoke `/usr/bin/as` to assemble into `output_obj`.
 /// 4. Remove the temp file.
@@ -118,7 +136,7 @@ pub extern "C" fn mog_assemble(
     let obj_path = unsafe { string_from_cstr(output_obj) };
 
     // Step 1: compile IL → assembly
-    let asm = match crate::compile(src, &T_ARM64_APPLE) {
+    let asm = match crate::compile(src, default_target()) {
         Ok(a) => a,
         Err(e) => {
             eprintln!("rqbe compile error: {e}");
@@ -181,7 +199,7 @@ pub extern "C" fn mog_compile_and_link(
     let out_path = unsafe { string_from_cstr(output_path) };
 
     // Step 1: compile IL → assembly
-    let asm = match crate::compile(src, &T_ARM64_APPLE) {
+    let asm = match crate::compile(src, default_target()) {
         Ok(a) => a,
         Err(e) => {
             eprintln!("rqbe compile error: {e}");

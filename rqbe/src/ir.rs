@@ -1491,6 +1491,9 @@ impl Target {
     /// Port of C QBE's `T.retregs(call_ref, nlv)`. The `nlv` parameter,
     /// if provided, is filled with per-class counts `[gpr, fpr]`.
     pub fn retregs(&self, call: Ref, nlv: Option<&mut [i32; 2]>) -> u64 {
+        if self.name.starts_with("amd64") {
+            return crate::amd64::retregs(call, nlv);
+        }
         crate::arm64::retregs(call, nlv)
     }
 
@@ -1499,6 +1502,9 @@ impl Target {
     /// Port of C QBE's `T.argregs(call_ref, m)`. The `m` parameter,
     /// if provided, is filled with per-class counts `[gpr, fpr]`.
     pub fn argregs(&self, call: Ref, m: Option<&mut [i32; 2]>) -> u64 {
+        if self.name.starts_with("amd64") {
+            return crate::amd64::argregs(call, m);
+        }
         crate::arm64::argregs(call, m)
     }
 
@@ -1506,8 +1512,10 @@ impl Target {
     ///
     /// Port of C QBE's `T.memargs(op)`.
     ///
-    /// TODO: This is a stub — ARM64 always returns 0.
-    pub fn memargs(&self, _op: Op) -> i32 {
+    pub fn memargs(&self, op: Op) -> i32 {
+        if self.name.starts_with("amd64") {
+            return crate::amd64::memargs(op);
+        }
         0
     }
 }
