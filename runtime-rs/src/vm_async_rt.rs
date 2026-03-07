@@ -6,7 +6,18 @@
 // so they stay under guest memory-limit accounting.
 
 use crate::gc::{gc_external_alloc, gc_external_free};
+use std::ffi::c_void;
 use std::ptr;
+
+type MogTimerDispatch = extern "C" fn(*mut u8, *mut u8, i64);
+
+static mut MOG_TIMER_DISPATCH: *const c_void = ptr::null();
+
+const CAP_TIMER_NAME: &[u8] = b"timer\0";
+const CAP_TIMER_SET_TIMEOUT_NAME: &[u8] = b"setTimeout\0";
+
+const ERR_TIMER_MISSING_ARG: &[u8] = b"timer.setTimeout: expected one int argument\0";
+const ERR_TIMER_BAD_ARG: &[u8] = b"timer.setTimeout: expected int argument\0";
 
 // ---------------------------------------------------------------------------
 // Monotonic clock helpers
@@ -492,6 +503,84 @@ unsafe fn add_timer_inner(
     }
 }
 
+#[unsafe(no_mangle)]
+pub extern "C" fn mog_set_timer_dispatcher(dispatch: *const c_void) {
+    unsafe {
+        MOG_TIMER_DISPATCH = dispatch;
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mog_clear_timer_dispatcher() {
+    unsafe {
+        MOG_TIMER_DISPATCH = ptr::null();
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mog_register_timer_host(vm: *mut u8) -> i32 {
+    if vm.is_null() {
+        return -1;
+    }
+
+    if unsafe { mog_has_capability(vm, CAP_TIMER_NAME.as_ptr()) } != 0 {
+        return 0;
+    }
+
+    const ENTRIES: &[MogCapEntry] = &[
+        MogCapEntry {
+            name: CAP_TIMER_SET_TIMEOUT_NAME.as_ptr(),
+            func: mog_timer_set_timeout,
+        },
+        MogCapEntry {
+            name: ptr::null(),
+            func: mog_timer_sentinel,
+        },
+    ];
+
+    unsafe { mog_register_capability(vm, CAP_TIMER_NAME.as_ptr(), ENTRIES.as_ptr()) }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn mog_timer_sentinel(_vm: *mut u8, _args: *const MogValue, _nargs: i32) -> MogValue {
+    crate::vm::mog_none()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mog_timer_set_timeout(_vm: *mut u8, args: *const MogValue, nargs: i32) -> MogValue {
+    if nargs != 1 || args.is_null() {
+        return mog_error(ERR_TIMER_MISSING_ARG.as_ptr());
+    }
+
+    let ms = unsafe {
+        let arg = &*args;
+        if arg.tag != MOG_INT {
+            return mog_error(ERR_TIMER_BAD_ARG.as_ptr());
+        }
+        arg.data.i
+    };
+
+    let future = mog_future_new();
+    if future.is_null() {
+        return mog_error("timer.setTimeout: out of memory\0".as_ptr());
+    }
+
+    let delay = if ms < 0 { 0 } else { ms };
+    let loop_ptr = mog_loop_get_global();
+
+    let dispatch = unsafe { MOG_TIMER_DISPATCH };
+    if !dispatch.is_null() {
+        let cb: MogTimerDispatch = unsafe { std::mem::transmute(dispatch) };
+        cb(_vm, future as *mut u8, delay);
+    } else if loop_ptr.is_null() {
+        mog_future_complete(future, delay);
+    } else {
+        mog_loop_add_timer_with_value(loop_ptr, delay, future, delay);
+    }
+
+    mog_int(future as i64)
+}
+
 // ---------------------------------------------------------------------------
 // FD Watchers
 // ---------------------------------------------------------------------------
@@ -786,6 +875,188 @@ pub extern "C" fn mog_loop_run(loop_ptr: *mut u8) {
         }
 
         el.running = 0;
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mog_loop_step(loop_ptr: *mut u8) -> i32 {
+    if loop_ptr.is_null() {
+        return -1;
+    }
+
+    unsafe {
+        let el = &mut *(loop_ptr as *mut MogEventLoop);
+
+        if el.running != 0 {
+            return 1;
+        }
+
+        let mut did_work = false;
+
+        // Process timers and ready entries repeatedly until there is no immediate
+        // forward progress.
+        loop {
+            let mut progress = false;
+
+            // 1. Fire expired timers
+            let t = now_ns();
+            while !el.timers.is_null() && (*el.timers).deadline_ns <= t {
+                let timer = el.timers;
+                el.timers = (*timer).next;
+                let future_ptr = (*timer).future as *mut u8;
+                let result_val = (*timer).result_value;
+                gc_external_free(timer as *mut u8);
+                mog_future_complete(future_ptr, result_val);
+                progress = true;
+            }
+
+            // 2. Process ready queue
+            while !el.ready_head.is_null() {
+                let f = el.ready_head;
+                el.ready_head = (*f).next;
+                if el.ready_head.is_null() {
+                    el.ready_tail = ptr::null_mut();
+                }
+                (*f).next = ptr::null_mut();
+
+                if !(*f).coro_handle.is_null() {
+                    let hdl = (*f).coro_handle;
+                    (*f).coro_handle = ptr::null_mut();
+                    mog_coro_resume(hdl);
+                    progress = true;
+                }
+            }
+
+            if progress {
+                did_work = true;
+            }
+
+            // 3. Poll descriptors with zero timeout to avoid blocking.
+            if el.watchers.is_null() {
+                break;
+            }
+
+            let mut read_fds: libc::fd_set = std::mem::zeroed();
+            let mut write_fds: libc::fd_set = std::mem::zeroed();
+            libc::FD_ZERO(&mut read_fds);
+            libc::FD_ZERO(&mut write_fds);
+
+            let mut max_fd: i32 = -1;
+            let mut w = el.watchers;
+            while !w.is_null() {
+                if (*w).events & MOG_FD_READ != 0 {
+                    libc::FD_SET((*w).fd, &mut read_fds);
+                }
+                if (*w).events & MOG_FD_WRITE != 0 {
+                    libc::FD_SET((*w).fd, &mut write_fds);
+                }
+                if (*w).fd > max_fd {
+                    max_fd = (*w).fd;
+                }
+                w = (*w).next;
+            }
+
+            let mut tv = libc::timeval {
+                tv_sec: 0,
+                tv_usec: 0,
+            };
+
+            let nready = if max_fd >= 0 {
+                libc::select(
+                    max_fd + 1,
+                    &mut read_fds,
+                    &mut write_fds,
+                    ptr::null_mut(),
+                    &mut tv,
+                )
+            } else {
+                libc::select(0, ptr::null_mut(), ptr::null_mut(), ptr::null_mut(), &mut tv)
+            };
+
+            if nready > 0 {
+                progress = false;
+                let mut prev_ptr: *mut *mut MogFdWatcher = &mut el.watchers;
+                let mut watcher = el.watchers;
+                while !watcher.is_null() {
+                    let next = (*watcher).next;
+                    let mut fired = false;
+                    if ((*watcher).events & MOG_FD_READ != 0)
+                        && libc::FD_ISSET((*watcher).fd, &read_fds)
+                    {
+                        fired = true;
+                    }
+                    if ((*watcher).events & MOG_FD_WRITE != 0)
+                        && libc::FD_ISSET((*watcher).fd, &write_fds)
+                    {
+                        fired = true;
+                    }
+
+                    if fired {
+                        *prev_ptr = next;
+                        let watcher_fd = (*watcher).fd;
+                        let watcher_future = (*watcher).future as *mut u8;
+
+                        if watcher_fd == libc::STDIN_FILENO && ((*watcher).events & MOG_FD_READ != 0) {
+                            let mut buf = [0u8; 4096];
+                            let result = libc::fgets(
+                                buf.as_mut_ptr() as *mut libc::c_char,
+                                buf.len() as i32,
+                                stdin_file(),
+                            );
+                            if !result.is_null() {
+                                let len = libc::strlen(buf.as_ptr() as *const libc::c_char);
+                                let mut slen = len;
+                                if slen > 0 && buf[slen - 1] == b'\n' {
+                                    slen -= 1;
+                                    buf[slen] = 0;
+                                }
+
+                                let dest = gc_external_alloc(slen + 1);
+                                if dest.is_null() {
+                                    crate::vm::mog_request_interrupt();
+                                    mog_future_complete(watcher_future, 0);
+                                    gc_external_free(watcher as *mut u8);
+                                    w = next;
+                                    progress = true;
+                                    watcher = next;
+                                    continue;
+                                }
+
+                                ptr::copy_nonoverlapping(buf.as_ptr(), dest, slen + 1);
+                                mog_future_complete(watcher_future, dest as i64);
+                            } else {
+                                mog_future_complete(watcher_future, 0);
+                            }
+                        } else {
+                            mog_future_complete(watcher_future, watcher_fd as i64);
+                        }
+
+                        gc_external_free(watcher as *mut u8);
+                        progress = true;
+                    } else {
+                        prev_ptr = &mut (*watcher).next;
+                    }
+
+                    watcher = next;
+                }
+            } else if nready == -1 {
+                crate::vm::mog_request_interrupt();
+                progress = true;
+            }
+
+            if !progress {
+                break;
+            }
+            did_work = true;
+        }
+
+        if did_work {
+            1
+        } else if el.timers.is_null() && el.ready_head.is_null() && el.watchers.is_null() && el.pending_count <= 0 {
+            0
+        } else {
+            1
+        }
     }
 }
 
