@@ -43,6 +43,7 @@
       </p>
     </footer>
     <script>
+      if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
       (() => {
         const wrap = document.querySelector(".guide-wrap");
         if (!wrap) return;
@@ -86,6 +87,7 @@
 
           let activeId = null;
           let rafPending = false;
+          let initialized = false;
 
           function setActive(id) {
             if (activeId === id) return;
@@ -98,9 +100,11 @@
             if (!activeLink) return;
             activeLink.classList.add("is-active");
             activeLink.setAttribute("aria-current", "true");
-            const li = activeLink.closest(".guide-toc-item");
-            if (li && tocContainer) {
-              li.scrollIntoView({ behavior: "auto", block: "nearest", inline: "nearest" });
+            if (initialized) {
+              const li = activeLink.closest(".guide-toc-item");
+              if (li && tocContainer) {
+                li.scrollIntoView({ behavior: "auto", block: "nearest", inline: "nearest" });
+              }
             }
           }
 
@@ -118,7 +122,7 @@
                 current = headings[headings.length - 1].id;
               }
               setActive(current);
-              if (current && window.location.hash !== "#" + current) {
+              if (initialized && current && window.location.hash !== "#" + current) {
                 history.replaceState(null, "", "#" + current);
               }
               rafPending = false;
@@ -126,6 +130,13 @@
           }
 
           onScroll();
+          requestAnimationFrame(() => {
+            if (!window.location.hash) {
+              window.scrollTo(0, 0);
+              if (tocContainer) tocContainer.scrollTop = 0;
+            }
+            initialized = true;
+          });
           window.addEventListener("scroll", onScroll, { passive: true });
           return;
         }
