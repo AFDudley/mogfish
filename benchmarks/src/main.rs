@@ -21,6 +21,7 @@ use mog::compiler::{compile, compile_to_binary, CompileOptions};
 enum BenchMode {
     Full,
     HostStop,
+    InterruptChecks,
 }
 
 struct Args {
@@ -42,6 +43,9 @@ fn parse_args() -> Args {
             "--host-stop-bench" => {
                 args.mode = BenchMode::HostStop;
             }
+            "--interrupt-check-bench" => {
+                args.mode = BenchMode::InterruptChecks;
+            }
             "--iterations" => {
                 i += 1;
                 args.iterations = argv[i].parse().expect("--iterations requires a number");
@@ -52,7 +56,7 @@ fn parse_args() -> Args {
             }
             "--help" | "-h" => {
                 eprintln!(
-                    "Usage: mog-bench [--iterations N] [--warmup N] [--host-stop-bench]"
+                    "Usage: mog-bench [--iterations N] [--warmup N] [--host-stop-bench] [--interrupt-check-bench]"
                 );
                 std::process::exit(0);
             }
@@ -78,6 +82,12 @@ struct HostStopCase {
     source: String,
     limits: HostLimits,
     stop_guard: Duration,
+}
+
+struct InterruptCheckCase {
+    label: String,
+    source_path: PathBuf,
+    source: String,
 }
 
 const HOST_C_TEMPLATE: &str = r#"
@@ -135,6 +145,7 @@ static void setup_mog_vm(void) {
 "#;
 
 static HOST_STOP_COUNTER: AtomicU32 = AtomicU32::new(0);
+static INTERRUPT_CHECK_COUNTER: AtomicU32 = AtomicU32::new(0);
 
 fn project_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -235,6 +246,87 @@ fn time_host_stop_case(
         iterations,
         move || time_host_timeout_binary(&path, stop_limit, run_guard),
     ))
+}
+
+fn compile_interrupt_binary(case: &InterruptCheckCase, loop_interrupt_checks: bool) -> Option<PathBuf> {
+    let counter = INTERRUPT_CHECK_COUNTER.fetch_add(1, Ordering::SeqCst);
+    let pid = std::process::id();
+    let variant = if loop_interrupt_checks {
+        "checked"
+    } else {
+        "unchecked"
+    };
+    let out_path = std::env::temp_dir().join(format!("mog-interrupt-bench-{pid}-{counter}-{variant}.out"));
+
+    let options = CompileOptions {
+        output_path: Some(out_path.clone()),
+        source_path: Some(case.source_path.clone()),
+        loop_interrupt_checks,
+        ..Default::default()
+    };
+
+    match compile_to_binary(&case.source, &options) {
+        Ok(path) => Some(path),
+        Err(errors) => {
+            let msg = errors.join("; ");
+            if msg.contains("qbe") || msg.contains("runtime") || msg.contains("not found") {
+                eprintln!(
+                    "skipping interrupt-check binary '{} ({variant})': {msg}",
+                    case.label
+                );
+                None
+            } else {
+                panic!(
+                    "compile_to_binary failed for interrupt-check case '{} ({variant})': {msg}",
+                    case.label
+                );
+            }
+        }
+    }
+}
+
+fn time_binary_run(executable: &Path) -> f64 {
+    let start = Instant::now();
+    let status = Command::new(executable)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .unwrap_or_else(|e| panic!("failed to launch benchmark binary {}: {e}", executable.display()));
+    let elapsed = start.elapsed().as_secs_f64() * 1000.0;
+    assert!(
+        status.success(),
+        "benchmark binary failed: path={} status={status:?}",
+        executable.display()
+    );
+    elapsed
+}
+
+fn time_interrupt_check_case(
+    case: &InterruptCheckCase,
+    warmup: usize,
+    iterations: usize,
+) -> Option<InterruptCheckResult> {
+    let checked_binary = compile_interrupt_binary(case, true)?;
+    let unchecked_binary = compile_interrupt_binary(case, false)?;
+    let lines = count_lines(&case.source);
+
+    let checked_label = format!("{} (checks)", case.label);
+    let checked_result = run_bench(&checked_label, lines, warmup, iterations, {
+        let checked_binary = checked_binary;
+        move || time_binary_run(&checked_binary)
+    });
+
+    let unchecked_label = format!("{} (no checks)", case.label);
+    let unchecked_result = run_bench(&unchecked_label, lines, warmup, iterations, {
+        let unchecked_binary = unchecked_binary;
+        move || time_binary_run(&unchecked_binary)
+    });
+
+    Some(InterruptCheckResult {
+        label: case.label.clone(),
+        checked: checked_result,
+        unchecked: unchecked_result,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -403,6 +495,25 @@ fn load_host_stop_cases(bench_dir: &Path) -> Vec<HostStopCase> {
     .collect()
 }
 
+fn load_interrupt_check_cases(bench_dir: &Path) -> Vec<InterruptCheckCase> {
+    vec![
+        ("tight while loop", "interrupt-tight-while.mog"),
+        ("tight for-range loop", "interrupt-tight-for-range.mog"),
+    ]
+    .into_iter()
+    .map(|(label, file)| {
+        let path = bench_dir.join("mog").join(file);
+        let source = fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("cannot read benchmark source {}: {e}", path.display()));
+        InterruptCheckCase {
+            label: label.to_string(),
+            source_path: path,
+            source,
+        }
+    })
+    .collect()
+}
+
 // ---------------------------------------------------------------------------
 // Benchmark entry
 // ---------------------------------------------------------------------------
@@ -413,6 +524,12 @@ struct BenchResult {
     stats: Stats,
 }
 
+struct InterruptCheckResult {
+    label: String,
+    checked: BenchResult,
+    unchecked: BenchResult,
+}
+
 impl BenchResult {
     fn us_per_line(&self) -> f64 {
         if self.lines == 0 {
@@ -420,6 +537,28 @@ impl BenchResult {
         } else {
             self.stats.median * 1000.0 / self.lines as f64
         }
+    }
+}
+
+impl InterruptCheckResult {
+    fn checked_median_ms(&self) -> f64 {
+        self.checked.stats.median
+    }
+
+    fn unchecked_median_ms(&self) -> f64 {
+        self.unchecked.stats.median
+    }
+
+    fn delta_ms(&self) -> f64 {
+        self.checked_median_ms() - self.unchecked_median_ms()
+    }
+
+    fn slowdown_ratio(&self) -> f64 {
+        self.checked_median_ms() / self.unchecked_median_ms()
+    }
+
+    fn slowdown_pct(&self) -> f64 {
+        (self.slowdown_ratio() - 1.0) * 100.0
     }
 }
 
@@ -474,6 +613,34 @@ fn print_row(r: &BenchResult) {
     );
 }
 
+fn print_interrupt_check_header(title: &str) {
+    println!();
+    println!("{title}");
+    println!("{}", "=".repeat(title.len()));
+    println!(
+        "{:<30} {:>12} {:>14} {:>12} {:>12} {:>12}",
+        "benchmark",
+        "checked ms",
+        "unchecked ms",
+        "delta ms",
+        "slowdown x",
+        "slowdown %"
+    );
+    println!("{}", "-".repeat(100));
+}
+
+fn print_interrupt_check_row(r: &InterruptCheckResult) {
+    println!(
+        "{:<30} {:>12.3} {:>14.3} {:>12.3} {:>12.3} {:>12.1}",
+        r.label,
+        r.checked_median_ms(),
+        r.unchecked_median_ms(),
+        r.delta_ms(),
+        r.slowdown_ratio(),
+        r.slowdown_pct(),
+    );
+}
+
 fn run_host_stop_suite(args: &Args, bench_dir: &Path) {
     let stop_cases = load_host_stop_cases(bench_dir);
     let mut stop_results: Vec<BenchResult> = Vec::new();
@@ -508,6 +675,41 @@ fn run_host_stop_suite(args: &Args, bench_dir: &Path) {
     println!("done.");
 }
 
+fn run_interrupt_check_suite(args: &Args, bench_dir: &Path) {
+    let cases = load_interrupt_check_cases(bench_dir);
+    let mut results: Vec<InterruptCheckResult> = Vec::new();
+    let mut skipped = 0usize;
+
+    println!(
+        "interrupt-check benchmark iterations={}  warmup={}",
+        args.iterations, args.warmup
+    );
+    println!("timing binary execution only; each case is compiled once with checks and once without");
+
+    for case in &cases {
+        match time_interrupt_check_case(case, args.warmup, args.iterations) {
+            Some(result) => results.push(result),
+            None => skipped += 1,
+        }
+    }
+
+    if results.is_empty() {
+        eprintln!("no interrupt-check benchmark cases ran (all skipped)");
+    } else {
+        print_interrupt_check_header("loop-edge interrupt-check slowdown");
+        for result in &results {
+            print_interrupt_check_row(result);
+        }
+    }
+
+    if skipped > 0 {
+        eprintln!("skipped {skipped} interrupt-check benchmark case(s)");
+    }
+
+    println!();
+    println!("done.");
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -524,9 +726,16 @@ fn main() {
         args.iterations, args.warmup
     );
 
-    if let BenchMode::HostStop = args.mode {
-        run_host_stop_suite(&args, &bench_dir);
-        return;
+    match args.mode {
+        BenchMode::HostStop => {
+            run_host_stop_suite(&args, &bench_dir);
+            return;
+        }
+        BenchMode::InterruptChecks => {
+            run_interrupt_check_suite(&args, &bench_dir);
+            return;
+        }
+        BenchMode::Full => {}
     }
 
     // Pre-read all source files.

@@ -98,6 +98,8 @@ pub struct CompileOptions {
     /// Path to the source file being compiled.  Used to resolve capability
     /// declarations relative to the source file's directory.
     pub source_path: Option<PathBuf>,
+    /// Whether loop back-edges emit timer-interrupt checks.
+    pub loop_interrupt_checks: bool,
     /// Extra object files, C source files, or static libraries to link into
     /// the final binary.
     pub extra_link_objects: Vec<PathBuf>,
@@ -113,6 +115,7 @@ impl Default for CompileOptions {
             plugin_name: None,
             plugin_version: None,
             source_path: None,
+            loop_interrupt_checks: true,
             extra_link_objects: Vec::new(),
         }
     }
@@ -204,9 +207,18 @@ pub fn compile(source: &str, options: &CompileOptions) -> CompileResult {
             if options.plugin_mode {
                 let name = options.plugin_name.as_deref().unwrap_or("plugin");
                 let version = options.plugin_version.as_deref().unwrap_or("0.1.0");
-                crate::qbe_codegen::generate_plugin_qbe_ir(&ast, name, version)
+                crate::qbe_codegen::generate_plugin_qbe_ir_with_interrupts(
+                    &ast,
+                    name,
+                    version,
+                    options.loop_interrupt_checks,
+                )
             } else {
-                crate::qbe_codegen::generate_qbe_ir_with_caps(&ast, analyzer.get_capability_decls())
+                crate::qbe_codegen::generate_qbe_ir_with_caps_and_interrupts(
+                    &ast,
+                    analyzer.get_capability_decls(),
+                    options.loop_interrupt_checks,
+                )
             }
         }
     };

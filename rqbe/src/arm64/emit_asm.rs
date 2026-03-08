@@ -712,15 +712,16 @@ fn loadcon(c: &Con, r: u32, k: Cls, e: &mut E) {
     if (n | 0xffff) == -1 || logimm(n as u64, k) {
         let _ = writeln!(e.out, "\tmov\t{rn}, #{n}");
     } else {
-        let _ = writeln!(e.out, "\tmov\t{rn}, #{}", n as u16 as i16);
-        let mut remaining = n;
+        let bits = if w {
+            n as u64
+        } else {
+            (n as u32) as u64
+        };
+        let _ = writeln!(e.out, "\tmovz\t{rn}, #0x{:x}", bits & 0xffff);
+        let limit = if w { 64 } else { 32 };
         let mut sh = 16;
-        loop {
-            remaining >>= 16;
-            if remaining == 0 || (!w && sh == 32) || sh == 64 {
-                break;
-            }
-            let chunk = (remaining & 0xffff) as u16;
+        while sh < limit {
+            let chunk = ((bits >> sh) & 0xffff) as u16;
             if chunk != 0 {
                 let _ = writeln!(e.out, "\tmovk\t{rn}, #0x{chunk:x}, lsl #{sh}");
             }

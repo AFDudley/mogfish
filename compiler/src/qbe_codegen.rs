@@ -49,6 +49,7 @@ pub struct QBECodeGen {
     /// Tracks registers that hold `d` (f64) values, so we can emit
     /// `stored` instead of `storel` when storing them to memory.
     float_regs: HashSet<String>,
+    emit_loop_interrupt_checks: bool,
 }
 
 impl QBECodeGen {
@@ -91,7 +92,12 @@ impl QBECodeGen {
             imported_packages: HashMap::new(),
             function_param_info: HashMap::new(),
             float_regs: HashSet::new(),
+            emit_loop_interrupt_checks: true,
         }
+    }
+
+    fn set_loop_interrupt_checks(&mut self, enabled: bool) {
+        self.emit_loop_interrupt_checks = enabled;
     }
 
     // --- Register & Label Management ---
@@ -2642,6 +2648,10 @@ impl QBECodeGen {
     }
 
     fn emit_interrupt_check(&mut self) {
+        if !self.emit_loop_interrupt_checks {
+            return;
+        }
+
         let flag = self.fresh_reg();
         self.emit(&format!("    {} =w loadw $mog_interrupt_flag", flag));
         let check_lbl = self.fresh_label();
@@ -4699,7 +4709,12 @@ impl QBECodeGen {
 // ---------------------------------------------------------------------------
 
 pub fn generate_qbe_ir(ast: &Statement) -> String {
+    generate_qbe_ir_with_interrupts(ast, true)
+}
+
+pub fn generate_qbe_ir_with_interrupts(ast: &Statement, emit_loop_interrupt_checks: bool) -> String {
     let mut codegen = QBECodeGen::new();
+    codegen.set_loop_interrupt_checks(emit_loop_interrupt_checks);
     codegen.generate(ast);
     let mut result = String::new();
     result.push_str(&codegen.data_section);
@@ -4709,7 +4724,16 @@ pub fn generate_qbe_ir(ast: &Statement) -> String {
 }
 
 pub fn generate_qbe_ir_with_caps(ast: &Statement, caps: HashMap<String, CapabilityDecl>) -> String {
+    generate_qbe_ir_with_caps_and_interrupts(ast, caps, true)
+}
+
+pub fn generate_qbe_ir_with_caps_and_interrupts(
+    ast: &Statement,
+    caps: HashMap<String, CapabilityDecl>,
+    emit_loop_interrupt_checks: bool,
+) -> String {
     let mut codegen = QBECodeGen::new();
+    codegen.set_loop_interrupt_checks(emit_loop_interrupt_checks);
     codegen.set_capability_decls(caps);
     codegen.generate(ast);
     let mut result = String::new();
@@ -4720,7 +4744,17 @@ pub fn generate_qbe_ir_with_caps(ast: &Statement, caps: HashMap<String, Capabili
 }
 
 pub fn generate_plugin_qbe_ir(ast: &Statement, name: &str, version: &str) -> String {
+    generate_plugin_qbe_ir_with_interrupts(ast, name, version, true)
+}
+
+pub fn generate_plugin_qbe_ir_with_interrupts(
+    ast: &Statement,
+    name: &str,
+    version: &str,
+    emit_loop_interrupt_checks: bool,
+) -> String {
     let mut codegen = QBECodeGen::new();
+    codegen.set_loop_interrupt_checks(emit_loop_interrupt_checks);
     codegen.set_plugin_mode(name, version);
     codegen.generate(ast);
     let mut result = String::new();
