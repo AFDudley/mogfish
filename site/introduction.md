@@ -28,7 +28,7 @@ Mog is a statically typed, compiled, embedded language (think statically typed L
 
 ### Agent hook
 
-An agent hook that runs after context compaction. The first two lines are the entire security story: `import` pulls in host-defined types, `optional` capabilities degrade gracefully, and structs are constructed inline.
+An agent hook that runs after context compaction. All I/O functions are provided by the host: `import` pulls in host-defined types, and `optional` capabilities degrade gracefully.
 
 ```mog
 import agent;       // Agent, Message, Role types
@@ -39,7 +39,7 @@ pub fn on_post_compaction(session: agent.Session) {
   log.info("post-compaction hook: injecting reminder");
 
   session.messages.push(agent.Message {
-    role: agent.Role.system,
+    role: agent.Role.SYSTEM,
     content: "IMPORTANT: Always run tests before committing.",
   });
 }
@@ -47,7 +47,7 @@ pub fn on_post_compaction(session: agent.Session) {
 
 ### Async HTTP with retry
 
-An async HTTP fetcher with retry logic -- 17 lines, no boilerplate. `async`/`await` suspends without blocking, `match` destructures `Result` values, and f-strings interpolate expressions directly.
+An async HTTP fetcher with retry logic. Mog supports `async`/`await` that suspends without blocking the host's agent loop, `match` for destructuring `Result` values, and f-strings for expression interpolation.
 
 ```mog
 async fn fetch_with_retry(url: string, max_retries: int) -> Result<string> {
@@ -65,13 +65,13 @@ async fn fetch_with_retry(url: string, max_retries: int) -> Result<string> {
       },
     }
   }
-  return err("unreachable");
+  return err(f"all {max_retries} attempts to fetch {url} failed");
 }
 ```
 
 ### FFT on tensors
 
-A radix-2 FFT on `tensor<f32>` data -- real numeric code, not a toy. Mog has no operator precedence, so mixed arithmetic requires explicit parentheses. Type conversions like `size as float` and `cos(angle) as f32` are always explicit -- no implicit coercion.
+Mog compiles to machine code, with native support for multi-dimensional arrays (tensors). Here is a radix-2 FFT on `tensor<f32>` data. Mog has no operator precedence, so mixed arithmetic requires explicit parentheses. Type conversions like `size as float` and `cos(angle) as f32` are always explicit -- no implicit coercion.
 
 ```mog
 // Fast Fourier Transform (Cooley-Tukey, radix-2, in-place)
