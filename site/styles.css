@@ -201,26 +201,6 @@ h4 {
   color: var(--ink);
 }
 
-.jump-to-examples {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  margin: 0.25rem 0 0.9rem;
-  padding: 0.48rem 0.9rem;
-  border-radius: 999px;
-  text-decoration: none;
-  font-weight: 600;
-  color: #ffffff;
-  background: linear-gradient(120deg, #0891b2, #2563eb);
-  border: 1px solid #0c4ac0;
-  box-shadow: 0 10px 20px -14px #0c4ac0;
-}
-
-.jump-to-examples:hover {
-  color: #e7effd;
-  border-color: #082f99;
-  box-shadow: 0 14px 26px -16px #0c4ac0;
-}
 
 .guide-toc-list {
   margin: 0;
