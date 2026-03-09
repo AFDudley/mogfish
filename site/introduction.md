@@ -219,7 +219,7 @@ The second issue with LLVM is that for Mog, the compiler itself is part of the t
 
 ## Current Status
 
-Mog was created entirely using the [Volt](https://github.com/Martian-Engineering/volt) coding agent, the vast majority of which used a single continuous session spanning over three weeks, using Voltropy's [Lossless Context Management](https://papers.voltropy.com/LCM) to maintain its memory after compactions. This session ported the QBE compiler to safe Rust. The models used were Claude Opus 4.6, Kimi k2.5, and GLM-4.7.
+The first version of Mog was created entirely using the [Volt](https://github.com/Martian-Engineering/volt) coding agent, the vast majority of which used a single continuous session spanning over three weeks, using Voltropy's [Lossless Context Management](https://papers.voltropy.com/LCM) to maintain its memory after compactions. This session ported the QBE compiler to safe Rust. The models used were Claude Opus 4.6, Kimi k2.5, and GLM-4.7.
 
 Significant work remains to standardize the functions that hosts provide to Mog programs. This should include much of what the Python standard library provides: support for JSON, CSV, SQLite, POSIX filesystem and networking operations, etc. The Mog standard library should also provide async functions for calling LLMs -- both high-level interfaces (like Simon Willison's `llm` CLI tool or `DSPy` modules) and low-level interfaces that allow fine-grained context management.
 
