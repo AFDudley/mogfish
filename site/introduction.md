@@ -18,7 +18,7 @@ Mog is a statically typed, compiled, embedded language (think statically typed L
 - An AI agent writes a Mog program, compiles it, and dynamically loads it as a plugin, script, or hook.
 - The host controls exactly which functions a Mog program can call (capability-based permissions), so permissions propagate from agent to agent-written code.
 - Compiled to native code for low-latency plugin execution -- no interpreter overhead, no JIT, no process startup cost.
-- The compiler is being rewritten in safe Rust so the entire toolchain can be audited for security.
+- The compiler is written in safe Rust so the entire toolchain can be audited for security.
 - Even without a full security audit, Mog is already useful for agents extending themselves with their own code.
 - MIT licensed, contributions welcome. https://github.com/voltropy/mog
 
@@ -205,13 +205,13 @@ Mog is an embedded language. It runs inside a host program, much like Lua -- the
 
 Any I/O, FFI, syscalls, or interaction with other systems can only be done by calling a host function -- a function that the host makes available to the Mog program. This is the essence of Mog's capability system: the host decides exactly which functions it will allow the guest to call. The host is also free to filter the inputs to such a function and to filter the response delivered back to the Mog program.
 
-Part of this isolation involves preventing a Mog program from taking over the host process in subtler ways. An upcoming feature will allow the host to control whether a Mog program can request a larger memory arena, preventing the guest from consuming all available RAM. An existing feature is cooperative interrupt polling: Mog loops all have interrupt checks added at back-edges, which allows the host to halt the guest program without killing the process. This enables timeout enforcement. There is no way for a guest program to corrupt memory or kill the process (assuming correct implementation of the compiler and host).
+Part of this isolation involves preventing a Mog program from taking over the host process in subtler ways. The host can control whether a Mog program can request a larger memory arena, preventing the guest from consuming all available RAM. Cooperative interrupt polling means Mog loops all have interrupt checks added at back-edges, which allows the host to halt the guest program without killing the process. This enables timeout enforcement. There is no way for a guest program to corrupt memory or kill the process (assuming correct implementation of the compiler and host).
 
 Since a typical agent runs an event loop, Mog programs are designed to run inside an event loop, familiar to anyone who has written JavaScript or TypeScript. Mog's support for this consists primarily of async/await syntax. Mog programs can define async functions, and importantly, the host can also provide async functions that the guest can call. This allows a guest program to fire off an HTTP request and a timer and do something different depending on which one finishes first -- internally the compiler implements this using coroutine lowering, based on LLVM's design for the same.
 
 ## The Compiler
 
-The compiler uses [QBE](https://c9x.me/compile/) as its code generation backend, which is being rewritten in safe Rust. Once complete, the entire toolchain for compiling, loading, and running a Mog program will be in Rust -- the goal is for all of it to be safe Rust, making it much more difficult to find an exploit in the toolchain.
+The compiler uses [QBE](https://c9x.me/compile/) as its code generation backend, rewritten in safe Rust. The entire toolchain for compiling, loading, and running a Mog program is in Rust -- the goal is for all of it to be safe Rust, making it much more difficult to find an exploit in the toolchain.
 
 The first implementation of Mog used LLVM as the backend. LLVM can produce somewhat faster code due to its wide array of optimizations, but it had two major issues. First, compile times were not fast enough. The new compiler has compile times that are not quite as good as Go's, but within an order of magnitude for programs under 1000 lines -- fast enough that the start time for one-off scripts is not painful. Mog does not claim to provide zero-cost abstractions or arbitrary opportunities for low-level optimization. It compiles to native code, but an expert can still write faster C or C++.
 
@@ -219,7 +219,7 @@ The second issue with LLVM is that for Mog, the compiler itself is part of the t
 
 ## Current Status
 
-Mog was created entirely using the [Volt](https://github.com/Martian-Engineering/volt) coding agent, the vast majority of which used a single continuous session spanning over three weeks, using Voltropy's [Lossless Context Management](https://papers.voltropy.com/LCM) to maintain its memory after compactions. This session is still running, porting the QBE compiler to safe Rust. The models used were Claude Opus 4.6, Kimi k2.5, and GLM-4.7.
+Mog was created entirely using the [Volt](https://github.com/Martian-Engineering/volt) coding agent, the vast majority of which used a single continuous session spanning over three weeks, using Voltropy's [Lossless Context Management](https://papers.voltropy.com/LCM) to maintain its memory after compactions. This session ported the QBE compiler to safe Rust. The models used were Claude Opus 4.6, Kimi k2.5, and GLM-4.7.
 
 Significant work remains to standardize the functions that hosts provide to Mog programs. This should include much of what the Python standard library provides: support for JSON, CSV, SQLite, POSIX filesystem and networking operations, etc. The Mog standard library should also provide async functions for calling LLMs -- both high-level interfaces (like Simon Willison's `llm` CLI tool or `DSPy` modules) and low-level interfaces that allow fine-grained context management.
 
