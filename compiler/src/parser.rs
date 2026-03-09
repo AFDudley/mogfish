@@ -1412,6 +1412,8 @@ impl<'a> Parser<'a> {
 
             let param_type = if self.check(TokenType::Fn) {
                 self.parse_function_type_annotation()
+            } else if self.check(TokenType::Tensor) {
+                self.parse_tensor_type_annotation()
             } else if self.check(TokenType::LBracket) {
                 let arr_name = self.parse_array_type_annotation();
                 self.resolve_type_name(&arr_name)

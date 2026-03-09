@@ -39,6 +39,93 @@ pub fn on_post_compaction(session: agent.Session) {
 }
 ```
 
+```mog
+async fn fetch_with_retry(url: string, max_retries: int) -> Result<string> {
+  attempts := 0;
+  for attempts < max_retries {
+    match await http.get(url) {
+      ok(response) => return ok(response.body),
+      err(e) => {
+        attempts = attempts + 1;
+        if attempts >= max_retries {
+          return err(f"failed after {max_retries} attempts: {e}");
+        }
+        println(f"attempt {attempts} failed, retrying...");
+        await sleep(1000 * attempts);  // exponential-ish backoff
+      },
+    }
+  }
+  return err("unreachable");
+}
+```
+
+```mog
+// Fast Fourier Transform (Cooley-Tukey, radix-2, in-place)
+// Returns a 2×n tensor: row 0 = real, row 1 = imaginary.
+
+fn fft(re: tensor<f32>, im: tensor<f32>) -> tensor<f32> {
+  n := re.shape[0];
+  r := tensor<f32>.zeros([n]);
+  im_out := tensor<f32>.zeros([n]);
+
+  for i in 0..n {
+    r[i] = re[i];
+    im_out[i] = im[i];
+  }
+
+  // bit-reversal permutation
+  j := 0;
+  for i := 1 to (n - 1) {
+    bit := n / 2;
+    while j >= bit {
+      j = j - bit;
+      bit = bit / 2;
+    }
+    j = j + bit;
+    if i < j {
+      tmp := r[i]; r[i] = r[j]; r[j] = tmp;
+      tmp = im_out[i]; im_out[i] = im_out[j]; im_out[j] = tmp;
+    }
+  }
+
+  // Cooley-Tukey butterfly — mixed operators require explicit parens
+  size := 2;
+  while size <= n {
+    half := size / 2;
+    step := (0.0 - 6.283185307) / (size as float);  // -2π/size, explicit int->float cast
+    k := 0;
+    while k < n {
+      angle := 0.0;
+      for m := 0 to (half - 1) {
+        cos_a := cos(angle) as f32;  // math builtins return f64; cast to match tensor
+        sin_a := sin(angle) as f32;
+        idx := (k + m) + half;
+
+        tr := (r[idx] * cos_a) - (im_out[idx] * sin_a);
+        ti := (r[idx] * sin_a) + (im_out[idx] * cos_a);
+
+        r[idx] = r[(k + m)] - tr;
+        im_out[idx] = im_out[(k + m)] - ti;
+        r[(k + m)] = r[(k + m)] + tr;
+        im_out[(k + m)] = im_out[(k + m)] + ti;
+
+        angle = angle + step;
+      }
+      k = k + size;
+    }
+    size = size * 2;
+  }
+
+  // pack real and imaginary into 2×n result
+  result := tensor<f32>.zeros([2, n]);
+  for i in 0..n {
+    result[i] = r[i];
+    result[n + i] = im_out[i];
+  }
+  return result;
+}
+```
+
 ## Why Mog?
 
 A general-purpose AI agent should be able to continuously extend and modify itself. Over time, an agent should grow into a personal server that manages tasks in all kinds of ways. To do that, the agent needs to write its own code -- and that code needs to be safe.

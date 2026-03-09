@@ -1196,3 +1196,108 @@ fn test_async_codegen_async_fn_is_export() {
         ir
     );
 }
+
+// ── FFT showcase (from moglang.org introduction) ─────────────────────────
+
+const FFT_SOURCE: &str = r#"
+fn fft(re: tensor<f32>, im: tensor<f32>) -> tensor<f32> {
+  n := re.shape[0];
+  r := tensor<f32>.zeros([n]);
+  im_out := tensor<f32>.zeros([n]);
+
+  // copy inputs
+  for i in 0..n {
+    r[i] = re[i];
+    im_out[i] = im[i];
+  }
+
+  // bit-reversal permutation
+  j := 0;
+  for i := 1 to (n - 1) {
+    bit := n / 2;
+    while j >= bit {
+      j = j - bit;
+      bit = bit / 2;
+    }
+    j = j + bit;
+    if i < j {
+      tmp := r[i]; r[i] = r[j]; r[j] = tmp;
+      tmp = im_out[i]; im_out[i] = im_out[j]; im_out[j] = tmp;
+    }
+  }
+
+  // Cooley-Tukey butterfly
+  size := 2;
+  while size <= n {
+    half := size / 2;
+    step := (0.0 - 6.283185307) / (size as float);
+    k := 0;
+    while k < n {
+      angle := 0.0;
+      for m := 0 to (half - 1) {
+        cos_a := cos(angle) as f32;
+        sin_a := sin(angle) as f32;
+        idx := (k + m) + half;
+
+        tr := (r[idx] * cos_a) - (im_out[idx] * sin_a);
+        ti := (r[idx] * sin_a) + (im_out[idx] * cos_a);
+
+        r[idx] = r[(k + m)] - tr;
+        im_out[idx] = im_out[(k + m)] - ti;
+        r[(k + m)] = r[(k + m)] + tr;
+        im_out[(k + m)] = im_out[(k + m)] + ti;
+
+        angle = angle + step;
+      }
+      k = k + size;
+    }
+    size = size * 2;
+  }
+
+  // pack real and imaginary into a 2×n result tensor
+  result := tensor<f32>.zeros([2, n]);
+  for i in 0..n {
+    result[i] = r[i];
+    result[n + i] = im_out[i];
+  }
+  return result;
+}
+"#;
+
+#[test]
+fn fft_parses_without_error() {
+    let ast = parse_source(FFT_SOURCE);
+    let stmts = get_program_stmts(&ast);
+    assert!(!stmts.is_empty(), "FFT program should parse into statements");
+}
+
+#[test]
+fn fft_analyzes_without_error() {
+    let (_ast, errors) = analyze_source(FFT_SOURCE);
+    assert!(
+        errors.is_empty(),
+        "FFT program should have no analysis errors: {errors:?}"
+    );
+}
+
+#[test]
+fn fft_generates_qbe_ir() {
+    let ast = parse_source(FFT_SOURCE);
+    let mut analyzer = SemanticAnalyzer::new();
+    let errors = analyzer.analyze(&ast);
+    assert!(errors.is_empty(), "analysis errors: {errors:?}");
+    let ir = generate_qbe_ir(&ast);
+
+    // Should generate the fft function
+    assert!(ir.contains("$fft"), "IR should contain fft function:\n{ir}");
+
+    // Should have int-to-float cast for `size as float`
+    assert!(
+        ir.contains("sltof"),
+        "IR should contain sltof for int->float cast:\n{ir}"
+    );
+
+    // Should call cos and sin builtins
+    assert!(ir.contains("cos"), "IR should call cos:\n{ir}");
+    assert!(ir.contains("sin"), "IR should call sin:\n{ir}");
+}
