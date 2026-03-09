@@ -197,8 +197,6 @@ pub fn on_tool_result(tool_name: string, stderr: string) {
 
 The first two lines tell the security story: this hook can append to a file and optionally log, but it cannot make HTTP requests, run shell commands, or read environment variables. The host decides what this program is allowed to do -- it can even interdict the `fs.append_file()` call if this program doesn't have that permission.
 
-To learn more about how to use Mog, see the detailed [Mog Language Guide](/).
-
 As agents get more complex and more of their code is bespoke, performance, correctness, and security of the combined system become harder to maintain. Mog is designed to address these issues.
 
 ## The Capability System
