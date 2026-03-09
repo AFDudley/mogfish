@@ -71,7 +71,7 @@ async fn fetch_with_retry(url: string, max_retries: int) -> Result<string> {
 
 ### FFT on tensors
 
-Mog compiles to machine code, with native support for multi-dimensional arrays (tensors). Here is a radix-2 FFT on `tensor<f32>` data. Mog has no operator precedence, so mixed arithmetic requires explicit parentheses. Type conversions like `size as float` and `cos(angle) as f32` are always explicit -- no implicit coercion.
+Mog compiles to machine code, with native support for multi-dimensional arrays (tensors). Here is a radix-2 FFT on `tensor<f32>` data. To minimize foot-guns, Mog has no operator precedence, so arithmetic involving non-associative operations requires explicit parentheses. Type conversions like `size as float` are always explicit -- no implicit coercion.
 
 ```mog
 // Fast Fourier Transform (Cooley-Tukey, radix-2, in-place)
