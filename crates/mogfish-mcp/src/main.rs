@@ -1,8 +1,5 @@
-// mogfish-mcp — MCP server
-//
-// See docs/plans/mogfish-outside-in-tdd.md, Layer 5
-
 fn main() {
-    eprintln!("mogfish-mcp: not yet implemented");
+    eprintln!("mogfish-mcp: not yet implemented as standalone server");
+    eprintln!("Use as a library via mogfish_mcp::MogfishMcp");
     std::process::exit(1);
 }

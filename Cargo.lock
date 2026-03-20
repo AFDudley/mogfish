@@ -371,6 +371,7 @@ dependencies = [
  "mogfish-traits",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",
