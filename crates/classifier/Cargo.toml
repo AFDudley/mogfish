@@ -10,3 +10,6 @@ description = "Input classification — fast path (known commands) + model fallb
 mogfish-traits = { path = "../mogfish-traits" }
 mogfish-skill-cache = { path = "../skill-cache" }
 anyhow.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

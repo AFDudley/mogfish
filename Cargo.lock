@@ -317,6 +317,7 @@ dependencies = [
  "anyhow",
  "mogfish-skill-cache",
  "mogfish-traits",
+ "tempfile",
 ]
 
 [[package]]
