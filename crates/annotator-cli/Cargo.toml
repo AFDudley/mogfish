@@ -13,6 +13,7 @@ path = "src/main.rs"
 [dependencies]
 mogfish-traits = { path = "../mogfish-traits" }
 mogfish-annotator = { path = "../annotator" }
+mogfish-engine-mistralrs = { path = "../mogfish-engine-mistralrs" }
 clap.workspace = true
 anyhow.workspace = true
 tracing.workspace = true

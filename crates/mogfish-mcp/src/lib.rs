@@ -33,11 +33,20 @@ impl MogfishMcp {
     /// `data_dir` is used for skill cache storage.
     /// `known_commands` is the list of commands for the classifier fast path.
     pub fn new(data_dir: &Path, known_commands: &[&str]) -> anyhow::Result<Self> {
+        Self::with_engine(data_dir, known_commands, Box::new(MockInferenceEngine::new()))
+    }
+
+    /// Create a new MCP server instance with a specific inference engine.
+    pub fn with_engine(
+        data_dir: &Path,
+        known_commands: &[&str],
+        engine: Box<dyn InferenceEngine>,
+    ) -> anyhow::Result<Self> {
         let cache_dir = data_dir.join("skills");
         let cache = SkillCache::open(&cache_dir)?;
         Ok(Self {
             cache,
-            engine: Box::new(MockInferenceEngine::new()),
+            engine,
             known_commands: known_commands.iter().map(|s| s.to_string()).collect(),
         })
     }

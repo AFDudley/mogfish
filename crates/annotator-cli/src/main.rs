@@ -123,6 +123,12 @@ fn run_daemon(dir: &std::path::Path, engine: &dyn mogfish_traits::InferenceEngin
 fn make_engine(name: &str) -> anyhow::Result<Box<dyn mogfish_traits::InferenceEngine>> {
     match name {
         "mock" => Ok(Box::new(mogfish_traits::MockInferenceEngine::new())),
+        "mistralrs" => {
+            let model_path = std::env::var("MOGFISH_MODEL_PATH")
+                .map_err(|_| anyhow::anyhow!("MOGFISH_MODEL_PATH must be set for mistralrs engine"))?;
+            let engine = mogfish_engine_mistralrs::MistralRsEngine::from_gguf(std::path::Path::new(&model_path))?;
+            Ok(Box::new(engine))
+        }
         other => anyhow::bail!("unknown engine: {other}"),
     }
 }
