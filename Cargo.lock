@@ -343,6 +343,7 @@ dependencies = [
  "mogfish-traits",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
