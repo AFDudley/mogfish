@@ -1,0 +1,15 @@
+// interrupt-tight-while.mog
+// Runtime benchmark for loop-edge interrupt check overhead in a tight while loop.
+
+fn main() -> int {
+    i := 0;
+    sum := 0;
+
+    while (i < 50000000) {
+        sum = sum + i;
+        i = i + 1;
+    }
+
+    println(sum);
+    return 0;
+}

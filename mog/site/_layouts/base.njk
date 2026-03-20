@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ title }} | Mog</title>
+    <meta
+      name="description"
+      content="Mog language guide: full language tutorial and reference."
+    />
+    <link rel="preload" as="style" href="/styles.css" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="aurora"></div>
+    <header class="site-header">
+      <div class="site-shell">
+        <a class="brand" href="/">Mog</a>
+        <nav aria-label="Primary">
+          <a
+            class="github-link"
+            href="https://github.com/voltropy/mog"
+            target="_blank"
+            rel="noreferrer"
+            aria-label="GitHub"
+          >
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <path
+                d="M8 0a8 8 0 0 0-2.53 15.59c.4.08.55-.18.55-.38v-1.37c-2.23.49-2.7-1.07-2.7-1.07-.36-.92-.88-1.16-.88-1.16-.72-.5.05-.49.05-.49.8.06 1.23.82 1.23.82.71 1.22 1.86.87 2.31.66.07-.52.28-.87.5-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.58.82-2.14-.08-.2-.36-1.01.08-2.1 0 0 .67-.21 2.2.82a7.4 7.4 0 0 1 4 0c1.53-1.03 2.2-.82 2.2-.82.44 1.09.16 1.9.08 2.1.51.56.82 1.27.82 2.14 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48v2.19c0 .21.15.47.56.39A8 8 0 0 0 8 0z"
+              />
+            </svg>
+            GitHub
+          </a>
+        </nav>
+      </div>
+    </header>
+    <main class="site-shell guide-page">
+      {{ content | safe }}
+    </main>
+    <footer class="site-footer">
+      <p>
+        &copy; 2026 Voltropy PBC · Created by <a href="https://voltropy.com" target="_blank" rel="noopener noreferrer">Voltropy</a>
+      </p>
+    </footer>
+    <script>
+      if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
+      (() => {
+        const wrap = document.querySelector(".guide-wrap");
+        if (!wrap) return;
+
+        const templates = Array.from(wrap.querySelectorAll("template.guide-chapter"));
+        if (!templates.length) return;
+
+        const isMobile = window.matchMedia("(max-width: 760px)").matches;
+
+        // Read chapter data from templates
+        const chapters = templates.map(t => ({
+          id: t.dataset.chapterId,
+          title: t.dataset.chapterTitle,
+          html: t.innerHTML
+        }));
+
+        // Remove templates and noscript from DOM
+        wrap.querySelectorAll("noscript").forEach(n => n.remove());
+        templates.forEach(t => t.remove());
+
+        if (!isMobile) {
+          // === DESKTOP: render all chapters, set up scrollspy ===
+          wrap.innerHTML = chapters.map(c => c.html).join("");
+
+          const tocLinks = Array.from(document.querySelectorAll(".guide-toc-list a[href^='#']"));
+          if (!tocLinks.length) return;
+
+          const tocContainer = document.querySelector(".guide-toc");
+          const idToLink = new Map();
+          for (const link of tocLinks) {
+            const id = link.getAttribute("href").slice(1);
+            if (id) idToLink.set(id, link);
+          }
+
+          const headings = Array.from(idToLink.keys())
+            .map(id => document.getElementById(id))
+            .filter(Boolean)
+            .sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
+
+          if (!headings.length) return;
+
+          let activeId = null;
+          let rafPending = false;
+          let initialized = false;
+
+          function setActive(id) {
+            if (activeId === id) return;
+            activeId = id;
+            for (const link of tocLinks) {
+              link.classList.remove("is-active");
+              link.removeAttribute("aria-current");
+            }
+            const activeLink = idToLink.get(id);
+            if (!activeLink) return;
+            activeLink.classList.add("is-active");
+            activeLink.setAttribute("aria-current", "true");
+            if (initialized) {
+              const li = activeLink.closest(".guide-toc-item");
+              if (li && tocContainer) {
+                li.scrollIntoView({ behavior: "auto", block: "nearest", inline: "nearest" });
+              }
+            }
+          }
+
+          function onScroll() {
+            if (rafPending) return;
+            rafPending = true;
+            requestAnimationFrame(() => {
+              const scrollTop = window.scrollY + 120;
+              let current = headings[0] ? headings[0].id : "";
+              for (const h of headings) {
+                if (h.offsetTop <= scrollTop) current = h.id;
+                else break;
+              }
+              if (window.innerHeight + window.scrollY >= document.body.scrollHeight - 8 && headings.length) {
+                current = headings[headings.length - 1].id;
+              }
+              setActive(current);
+              if (initialized && current && window.location.hash !== "#" + current) {
+                history.replaceState(null, "", "#" + current);
+              }
+              rafPending = false;
+            });
+          }
+
+          onScroll();
+          requestAnimationFrame(() => {
+            if (!window.location.hash) {
+              window.scrollTo(0, 0);
+              if (tocContainer) tocContainer.scrollTop = 0;
+            }
+            initialized = true;
+          });
+          window.addEventListener("scroll", onScroll, { passive: true });
+          return;
+        }
+
+        // === MOBILE: one chapter at a time ===
+
+        // Parse sub-headings from chapter HTML without adding to DOM
+        function parseSubs(html) {
+          const re = /<h([23])\s[^>]*id="([^"]*)"[^>]*>(.*?)<\/h[23]>/g;
+          const items = [];
+          let m;
+          while ((m = re.exec(html)) !== null) {
+            items.push({ id: m[2], title: m[3].replace(/<[^>]+>/g, "").trim(), level: parseInt(m[1]) });
+          }
+          return items;
+        }
+
+        const tocData = chapters.map((ch, i) => ({
+          index: i, id: ch.id, title: ch.title, subs: parseSubs(ch.html)
+        }));
+
+        // Hamburger button
+        const header = document.querySelector(".site-header .site-shell");
+        const hamburger = document.createElement("button");
+        hamburger.className = "mob-hamburger";
+        hamburger.setAttribute("aria-label", "Open table of contents");
+        hamburger.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>';
+        header.insertBefore(hamburger, header.firstChild);
+
+        // Overlay
+        const overlay = document.createElement("div");
+        overlay.className = "mob-toc-overlay";
+        const drawer = document.createElement("div");
+        drawer.className = "mob-toc-drawer";
+        drawer.innerHTML = '<div class="mob-toc-header"><span>Contents</span><button class="mob-toc-close" aria-label="Close">&times;</button></div>';
+        const tocList = document.createElement("ol");
+        tocList.className = "mob-toc-list";
+
+        tocData.forEach(ch => {
+          const li = document.createElement("li");
+          li.className = "mob-toc-ch";
+          li.dataset.chapterIndex = ch.index;
+          li.innerHTML = '<a href="#" data-chapter-index="' + ch.index + '" data-scroll-to="">' + ch.title.replace(/</g, "&lt;") + '</a>';
+          tocList.appendChild(li);
+          ch.subs.forEach(sub => {
+            const sli = document.createElement("li");
+            sli.className = sub.level === 2 ? "mob-toc-sub" : "mob-toc-sub3";
+            sli.dataset.chapterIndex = ch.index;
+            sli.innerHTML = '<a href="#" data-chapter-index="' + ch.index + '" data-scroll-to="' + sub.id + '">' + sub.title.replace(/</g, "&lt;") + '</a>';
+            tocList.appendChild(sli);
+          });
+        });
+
+        drawer.appendChild(tocList);
+        overlay.appendChild(drawer);
+        document.body.appendChild(overlay);
+
+        let currentIndex = 0;
+
+        function showChapter(index, scrollToId) {
+          if (index < 0 || index >= chapters.length) return;
+          currentIndex = index;
+          wrap.innerHTML = chapters[index].html;
+
+          if (index < chapters.length - 1) {
+            const next = chapters[index + 1];
+            const link = document.createElement("a");
+            link.className = "mob-next-chapter";
+            link.href = "#";
+            link.innerHTML = '<div class="mob-next-chapter-label">Next</div><div class="mob-next-chapter-title">' + next.title.replace(/</g, "&lt;") + '</div>';
+            link.addEventListener("click", e => { e.preventDefault(); showChapter(index + 1); });
+            wrap.appendChild(link);
+          }
+
+          tocList.querySelectorAll(".mob-toc-active").forEach(el => el.classList.remove("mob-toc-active"));
+          tocList.querySelectorAll("[data-chapter-index='" + index + "']").forEach(el => {
+            if (el.tagName === "LI") el.classList.add("mob-toc-active");
+          });
+
+          if (scrollToId) {
+            requestAnimationFrame(() => {
+              const target = document.getElementById(scrollToId);
+              if (target) target.scrollIntoView({ behavior: "auto" });
+              else window.scrollTo(0, 0);
+            });
+          } else {
+            window.scrollTo(0, 0);
+          }
+          history.replaceState(null, "", "#" + chapters[index].id);
+        }
+
+        tocList.addEventListener("click", e => {
+          const a = e.target.closest("a");
+          if (!a) return;
+          e.preventDefault();
+          closeOverlay();
+          showChapter(parseInt(a.dataset.chapterIndex, 10), a.dataset.scrollTo || null);
+        });
+
+        function openOverlay() {
+          overlay.classList.add("is-open");
+          document.body.style.overflow = "hidden";
+          const active = tocList.querySelector(".mob-toc-active");
+          if (active) active.scrollIntoView({ block: "center" });
+        }
+
+        function closeOverlay() {
+          overlay.classList.remove("is-open");
+          document.body.style.overflow = "";
+        }
+
+        hamburger.addEventListener("click", openOverlay);
+        overlay.addEventListener("click", e => { if (e.target === overlay) closeOverlay(); });
+        drawer.querySelector(".mob-toc-close").addEventListener("click", closeOverlay);
+
+        // Initial chapter from URL hash
+        let startIndex = 0;
+        let startScroll = null;
+        const hash = window.location.hash.slice(1);
+        if (hash) {
+          for (let i = 0; i < tocData.length; i++) {
+            if (tocData[i].id === hash) { startIndex = i; break; }
+            for (const sub of tocData[i].subs) {
+              if (sub.id === hash) { startIndex = i; startScroll = hash; break; }
+            }
+            if (startScroll) break;
+          }
+        }
+        showChapter(startIndex, startScroll);
+      })();
+    </script>
+  </body>
+</html>

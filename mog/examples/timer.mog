@@ -1,0 +1,76 @@
+// Async Timer Program
+// Demonstrates true async/await with concurrent timers and non-blocking I/O.
+// Type a number (milliseconds) and press Enter to start a timer.
+// Multiple timers run concurrently via the event loop. Type 'q' to quit.
+
+requires process;
+
+// A timer coroutine: sleeps for the given duration, then prints a message
+async fn run_timer(name: i64, ms: i64) -> i64 {
+  print_string("  [Timer ");
+  print(name);
+  print_string("] Started: ");
+  print(ms);
+  print_string("ms");
+  println();
+  flush_stdout();
+
+  await process.sleep(ms);
+
+  print_string("  [Timer ");
+  print(name);
+  print_string("] DING! (");
+  print(ms);
+  print_string("ms elapsed)");
+  println();
+  flush_stdout();
+
+  return 0;
+}
+
+// Input handler coroutine
+async fn input_loop() -> i64 {
+  timer_count: i64 = 0;
+
+  print_string("=== Async Timer Demo ===");
+  println();
+  print_string("Enter milliseconds to start a timer, 'q' to quit.");
+  println();
+  println();
+  flush_stdout();
+
+  running: i64 = 1;
+  while running {
+    print_string("> ");
+    flush_stdout();
+
+    line: ptr = await async_read_line();
+
+    // Check for quit
+    eq: i64 = string_eq(line, "q");
+    if eq {
+      print_string("Goodbye!");
+      println();
+      flush_stdout();
+      running = 0;
+    } else {
+      // Parse as milliseconds
+      ms: i64 = parse_int(line);
+      if ms > 0 {
+        timer_count = timer_count + 1;
+        spawn run_timer(timer_count, ms);
+      } else {
+        print_string("Enter a number (ms) or 'q' to quit");
+        println();
+        flush_stdout();
+      }
+    }
+  }
+
+  return 0;
+}
+
+async fn main() -> i64 {
+  await input_loop();
+  return 0;
+}

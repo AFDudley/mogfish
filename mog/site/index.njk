@@ -1,0 +1,26 @@
+---
+layout: base.njk
+title: The Mog Language Guide
+---
+
+<section class="guide-layout">
+  <details class="guide-toc" open>
+    <summary>Contents</summary>
+    <a class="guide-toc-top" href="#guide">Back to top</a>
+    <ol class="guide-toc-list">
+      {% for item in guideToc %}
+        {% if not (loop.first and item.level == 1 and item.title == "The Mog Language Guide") %}
+          <li class="guide-toc-item guide-toc-level-{{ item.level }}">
+            <a href="#{{ item.id }}">{{ item.title }}</a>
+          </li>
+        {% endif %}
+      {% endfor %}
+    </ol>
+  </details>
+  <article id="guide" class="guide-wrap">
+    <noscript><p>This guide requires JavaScript to display.</p></noscript>
+    {% for ch in guideChapters %}
+    <template class="guide-chapter" data-chapter-id="{{ ch.id }}" data-chapter-title="{{ ch.title }}">{{ ch.html | safe }}</template>
+    {% endfor %}
+  </article>
+</section>

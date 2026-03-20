@@ -1,0 +1,19 @@
+requires compute;
+
+// An async helper that the plugin uses internally.
+async fn square_with_delay(x: int, ms: int) -> int {
+    result := await compute.slow_square(x, ms);
+    return result;
+}
+
+// Exported: calls the host-provided async capability twice and sums results.
+pub async fn sum_of_squares(a: int, b: int) -> int {
+    sa := await square_with_delay(a, 10);
+    sb := await square_with_delay(b, 10);
+    return (sa + sb);
+}
+
+// Exported: a simple sync function for comparison.
+pub fn add(x: int, y: int) -> int {
+    return (x + y);
+}

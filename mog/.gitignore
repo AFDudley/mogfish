@@ -1,0 +1,72 @@
+# Build outputs
+build/
+dist/
+*.o
+*.ll
+showcase
+fib
+loop
+http_client
+basic_features
+combined_features
+counter_loop
+factorial_recursive
+fibonacci_tco
+main_example
+nested_operations
+simple_loop
+while_loop
+bench_gc_*
+test_arithmetic
+test_complex
+test_comprehensive
+test_ultimate
+test_nested
+test_continue
+test_matrix
+
+# Debug files
+test_*.txt
+
+# Editor
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# Test output
+temp.*
+
+# Images
+*.png
+timer
+
+# Rust
+compiler/target/
+/rqbe/target/
+runtime-rs/target/
+benchmarks/target/
+mogfmt/target/
+examples/plugins/async_plugin_demo/target/
+examples/plugins/rust_host/target/
+
+# Generated docs
+guide/
+_site/
+
+# Legacy / stray
+node_modules/
+a64globals.h
+guide_search
+large
+showcase_rust
+test_backend
+test_backend.c
+test_fn_gen.ts
+test_simple2
+test_soa_f64
+test_soa_f64_thorough
+test_ulen_range
+src/debug_*.ts
+rqbe/examples/

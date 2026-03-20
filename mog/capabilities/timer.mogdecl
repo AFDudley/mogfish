@@ -1,0 +1,7 @@
+// timer — TypeScript-hosted timer capability.
+// Exposes an async setTimeout() API that suspends an async context until the
+// host's JS timer callback fires.
+
+capability timer {
+  async fn setTimeout(ms: int) -> int;
+}

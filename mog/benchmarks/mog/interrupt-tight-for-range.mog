@@ -1,0 +1,13 @@
+// interrupt-tight-for-range.mog
+// Runtime benchmark for loop-edge interrupt check overhead in a tight for-range loop.
+
+fn main() -> int {
+    sum := 0;
+
+    for i in 0..50000000 {
+        sum = sum + i;
+    }
+
+    println(sum);
+    return 0;
+}
