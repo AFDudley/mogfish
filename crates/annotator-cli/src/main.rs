@@ -1,8 +1,11 @@
 // mogfish-annotate CLI — batch and daemon modes
 //
-// See docs/plans/mogfish-outside-in-tdd.md, Layer 0
+// See docs/plans/mogfish-outside-in-tdd.md, Layer 0, 2
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 
@@ -28,6 +31,17 @@ enum Commands {
         /// Show what would change without writing
         #[arg(long)]
         dry_run: bool,
+    },
+
+    /// Watch a directory and annotate new/changed .fish files
+    Daemon {
+        /// Directory to watch for .fish completion files
+        #[arg(long)]
+        dir: PathBuf,
+
+        /// Inference engine to use
+        #[arg(long, default_value = "mock")]
+        engine: String,
     },
 }
 
@@ -66,8 +80,43 @@ fn main() -> anyhow::Result<()> {
                 }
             }
         }
+
+        Commands::Daemon { dir, engine } => {
+            let engine = make_engine(&engine)?;
+            run_daemon(&dir, engine.as_ref())?;
+        }
     }
 
+    Ok(())
+}
+
+fn run_daemon(dir: &std::path::Path, engine: &dyn mogfish_traits::InferenceEngine) -> anyhow::Result<()> {
+    eprintln!("mogfish-annotate daemon watching: {}", dir.display());
+
+    // Initial scan
+    let results = mogfish_annotator::annotate_directory(dir, engine, false)?;
+    let annotated = results.iter().filter(|r| r.annotated).count();
+    eprintln!("Initial scan: annotated {annotated} files");
+
+    // Set up signal handler for clean shutdown
+    let running = Arc::new(AtomicBool::new(true));
+    let r = running.clone();
+    ctrlc::set_handler(move || {
+        r.store(false, Ordering::SeqCst);
+    })?;
+
+    // Poll loop — check for new/changed files
+    while running.load(Ordering::SeqCst) {
+        std::thread::sleep(Duration::from_secs(1));
+        if let Ok(results) = mogfish_annotator::annotate_directory(dir, engine, false) {
+            let annotated = results.iter().filter(|r| r.annotated).count();
+            if annotated > 0 {
+                eprintln!("Annotated {annotated} new/changed files");
+            }
+        }
+    }
+
+    eprintln!("Daemon shutting down cleanly");
     Ok(())
 }
 
