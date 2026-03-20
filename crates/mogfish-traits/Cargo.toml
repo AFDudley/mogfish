@@ -1,0 +1,11 @@
+[package]
+name = "mogfish-traits"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Shared traits and types for mogfish — InferenceEngine, Annotation, Classification"
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true

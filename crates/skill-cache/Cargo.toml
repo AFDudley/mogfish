@@ -1,0 +1,13 @@
+[package]
+name = "mogfish-skill-cache"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Skill storage — cached Mog scripts and .fish completion stub generation"
+
+[dependencies]
+mogfish-traits = { path = "../mogfish-traits" }
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true

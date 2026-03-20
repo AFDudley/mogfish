@@ -1,0 +1,22 @@
+[package]
+name = "mogfish-annotator-cli"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "CLI entry point for mogfish annotator — batch and daemon modes"
+
+[[bin]]
+name = "mogfish-annotate"
+path = "src/main.rs"
+
+[dependencies]
+mogfish-traits = { path = "../mogfish-traits" }
+mogfish-annotator = { path = "../annotator" }
+clap.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

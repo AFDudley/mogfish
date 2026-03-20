@@ -1,0 +1,12 @@
+[package]
+name = "mogfish-annotator"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Core annotator library — parses .fish completions, enriches via InferenceEngine"
+
+[dependencies]
+mogfish-traits = { path = "../mogfish-traits" }
+anyhow.workspace = true
+tracing.workspace = true

@@ -1,0 +1,12 @@
+[package]
+name = "mogfish-classifier"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Input classification — fast path (known commands) + model fallback"
+
+[dependencies]
+mogfish-traits = { path = "../mogfish-traits" }
+mogfish-skill-cache = { path = "../skill-cache" }
+anyhow.workspace = true
