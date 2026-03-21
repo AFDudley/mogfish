@@ -229,3 +229,18 @@ Training data pipelines (Python, JSONL processing) use DC natively.
 **Track B**: Each layer gates the next. `cargo test --workspace` always green.
 Annotator smoke test against `fish/share/completions/` with mock engine.
 Pre-commit on every commit. `.pebbles/` for issue tracking.
+
+---
+
+## Notes
+
+### Inference backend: llama-cpp-4 (not mistral.rs)
+
+We use `llama-cpp-4` (llama.cpp Rust bindings) instead of `mistralrs` because
+mistralrs v0.7.0 doesn't support Gemma 3 GGUF format. PR #1964 on
+`EricLBuehler/mistral.rs` adds text-only Gemma 3 GGUF support (CI passes,
+branch: `glaziermag:codex/gemma3-text-gguf`) but is not yet merged.
+
+If/when PR #1964 merges and a new mistralrs version ships, switching back is
+an option — the `InferenceEngine` trait abstraction makes the backend swappable.
+For now, llama-cpp-4 is the stable choice.

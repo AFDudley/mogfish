@@ -1,0 +1,80 @@
+capability env {
+  fn get_name() -> string;
+  fn get_version() -> int;
+  fn timestamp() -> int;
+  fn random(min: int, max: int) -> int;
+  fn log(message: string);
+
+  // Async host function: simulate a delayed computation.
+  // The host schedules a timer, and when it fires the future completes
+  // with value * value. Demonstrates genuinely async host FFI.
+  async fn delay_square(value: int, delay_ms: int) -> int;
+}
+// fs — File system capability (POSIX host)
+// Provides file I/O operations. All functions are synchronous
+// but wrapped in async to match the spec.
+
+capability fs {
+  // Read entire file contents as string
+  fn read_file(path: string) -> string
+  
+  // Write string contents to file (creates or overwrites)
+  fn write_file(path: string, contents: string) -> int
+  
+  // Append string contents to file
+  fn append_file(path: string, contents: string) -> int
+  
+  // Check if file exists
+  fn exists(path: string) -> bool
+  
+  // Delete a file
+  fn remove(path: string) -> int
+  
+  // Get file size in bytes
+  fn file_size(path: string) -> int
+}
+capability http {
+  async fn get(url: string) -> string;
+  async fn post(url: string, body: string) -> string;
+}
+capability log {
+  fn info(message: string);
+  fn warn(message: string);
+  fn error(message: string);
+  fn debug(message: string);
+}
+capability math {
+  fn add(a: int, b: int) -> int;
+  fn multiply(a: int, b: int) -> int;
+  fn subtract(a: int, b: int) -> int;
+  fn divide(a: int, b: int) -> int;
+  fn abs(x: int) -> int;
+  fn max(a: int, b: int) -> int;
+  fn min(a: int, b: int) -> int;
+}
+// process — Process capability (POSIX host)
+// Provides process-level operations: sleep, env vars, exit.
+
+capability process {
+  // Sleep for given milliseconds (genuinely async via event loop timer)
+  async fn sleep(ms: int) -> int
+  
+  // Get environment variable value
+  fn getenv(name: string) -> string
+  
+  // Get current working directory
+  fn cwd() -> string
+  
+  // Exit the process with given code
+  fn exit(code: int) -> int
+  
+  // Get current timestamp in milliseconds since epoch
+  fn timestamp() -> int
+}
+// timer — TypeScript-hosted timer capability.
+// Exposes an async setTimeout() API that suspends an async context until the
+// host's JS timer callback fires.
+
+capability timer {
+  async fn setTimeout(ms: int) -> int;
+}

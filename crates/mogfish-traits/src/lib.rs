@@ -34,6 +34,9 @@ pub enum ClassificationCategory {
     CachedSkill,
     GenerateNew,
     Passthrough,
+    /// Escalate to a large model (via exophial) for capability fixes,
+    /// source code review, or tasks beyond the local model's ability.
+    Escalate,
 }
 
 /// Core trait for LLM-backed inference. Implementations:

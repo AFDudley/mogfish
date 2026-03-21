@@ -1,0 +1,150 @@
+/* ============================================================
+ * Mog Language Showcase with Host Embedding
+ * Demonstrates all major language features + host capabilities
+ * ============================================================ */
+
+requires env;
+requires fs;
+requires process;
+
+// ============================================================
+// 1. FUNCTIONS - basic, recursive, nested
+// ============================================================
+
+fn add(a: i64, b: i64) -> i64 {
+  return a + b;
+}
+
+fn factorial(n: i64) -> i64 {
+  if (n <= 1) {
+    return 1;
+  }
+  return n * factorial(n - 1);
+}
+
+fn fibonacci(n: i64) -> i64 {
+  if (n <= 0) { return 0; }
+  if (n == 1) { return 1; }
+  a: i64 = 0;
+  b: i64 = 1;
+  i: i64 = 2;
+  while (i <= n) {
+    temp: i64 = a + b;
+    a = b;
+    b = temp;
+    i := i + 1;
+  }
+  return b;
+}
+
+// ============================================================
+// 2. STRUCTS - declaration, creation, field access/mutation
+// ============================================================
+
+struct Point {
+  x: f64,
+  y: f64
+}
+
+struct Particle {
+  x: f64,
+  y: f64,
+  mass: f64
+}
+
+fn create_point(x: f64, y: f64) -> Point {
+  return Point { x: x, y: y };
+}
+
+fn distance_sq(p: Point) -> f64 {
+  return (p.x * p.x) + (p.y * p.y);
+}
+
+// ============================================================
+// 3. ASYNC FUNCTIONS - for the async/await showcase section
+// ============================================================
+
+// Simulate an async computation (runs eagerly, completes inline)
+async fn async_add(a: i64, b: i64) -> i64 {
+  return a + b;
+}
+
+// Chain of async calls: double a value
+async fn async_double(x: i64) -> i64 {
+  return x * 2;
+}
+
+// Nested async: adds then doubles
+async fn add_then_double(a: i64, b: i64) -> i64 {
+  sum: i64 = await async_add(a, b);
+  result: i64 = await async_double(sum);
+  return result;
+}
+
+// Async factorial (recursive async is interesting because each
+// level returns a Future that the caller awaits)
+async fn async_factorial(n: i64) -> i64 {
+  if (n <= 1) {
+    return 1;
+  }
+  sub: i64 = await async_factorial(n - 1);
+  return n * sub;
+}
+
+// Async fibonacci (iterative, but uses await for each step)
+async fn async_fib_step(a: i64, b: i64) -> i64 {
+  return a + b;
+}
+
+async fn async_fibonacci(n: i64) -> i64 {
+  if (n <= 1) {
+    return n;
+  }
+  a: i64 = 0;
+  b: i64 = 1;
+  i: i64 = 2;
+  while (i <= n) {
+    next: i64 = await async_fib_step(a, b);
+    a = b;
+    b = next;
+    i = i + 1;
+  }
+  return b;
+}
+
+// Tasks for parallel execution with all()
+async fn task_alpha() -> i64 {
+  return 100;
+}
+
+async fn task_beta() -> i64 {
+  return 200;
+}
+
+async fn task_gamma() -> i64 {
+  return 300;
+}
+
+// Tasks for race() - first to complete wins
+async fn fast_path() -> i64 {
+  return 1;
+}
+
+async fn slow_path() -> i64 {
+  return 999;
+}
+
+// Async pipeline: fetch -> transform -> validate
+async fn fetch_value() -> i64 {
+  return 21;
+}
+
+async fn transform(x: i64) -> i64 {
+  doubled: i64 = await async_double(x);
+  return doubled;
+}
+
+async fn validate(x: i64) -> i64 {
+  if (x > 0) {
+    return x;
+  }
