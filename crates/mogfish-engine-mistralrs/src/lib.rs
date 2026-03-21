@@ -14,7 +14,7 @@ use llama_cpp_4::context::params::LlamaContextParams;
 use llama_cpp_4::llama_backend::LlamaBackend;
 use llama_cpp_4::llama_batch::LlamaBatch;
 use llama_cpp_4::model::params::LlamaModelParams;
-use llama_cpp_4::model::{AddBos, LlamaChatMessage, LlamaModel, Special};
+use llama_cpp_4::model::{AddBos, LlamaModel, Special};
 use llama_cpp_4::sampling::LlamaSampler;
 use mogfish_traits::{
     Annotation, Classification, ClassificationCategory, GroundingContext, InferenceEngine,
@@ -59,26 +59,30 @@ impl MistralRsEngine {
         })
     }
 
-    /// Format messages using the model's chat template, create a context,
+    /// Format messages using Gemma 3 instruct format, create a context,
     /// tokenize, decode, and sample until EOS or max tokens.
+    ///
+    /// The GGUF's embedded chat template is ChatML (from fine-tuning tooling)
+    /// but the model's actual vocabulary uses Gemma tokens. We format manually.
     fn chat(&self, system_prompt: &str, user_message: &str) -> anyhow::Result<String> {
         let _lock = self
             .generation_lock
             .lock()
             .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
 
-        // Build chat messages and apply template
-        let messages = vec![
-            LlamaChatMessage::new("system".to_string(), system_prompt.to_string())
-                .map_err(|e| anyhow::anyhow!("chat message error: {e}"))?,
-            LlamaChatMessage::new("user".to_string(), user_message.to_string())
-                .map_err(|e| anyhow::anyhow!("chat message error: {e}"))?,
-        ];
+        // Gemma 3 instruct format — combine instruction (system) + input (user)
+        // into the user turn, matching the Alpaca fine-tuning data layout.
+        let prompt = if system_prompt.is_empty() {
+            format!(
+                "<start_of_turn>user\n{user_message}<end_of_turn>\n<start_of_turn>model\n"
+            )
+        } else {
+            format!(
+                "<start_of_turn>user\n{system_prompt}\n\n{user_message}<end_of_turn>\n<start_of_turn>model\n"
+            )
+        };
 
-        let prompt = self
-            .model
-            .apply_chat_template(None, messages, true)
-            .map_err(|e| anyhow::anyhow!("chat template error: {e}"))?;
+        eprintln!("[chat] prompt ({} chars): {:?}", prompt.len(), &prompt[..prompt.len().min(500)]);
 
         // Tokenize
         let tokens = self
@@ -124,10 +128,17 @@ impl MistralRsEngine {
                 break;
             }
 
+            // Use Special::Tokenize to see special tokens, then filter them
             let piece = self
                 .model
-                .token_to_str(token, Special::Plaintext)
+                .token_to_str(token, Special::Tokenize)
                 .map_err(|e| anyhow::anyhow!("token to str error: {e}"))?;
+
+            // Stop on any end-of-generation marker
+            if piece.contains("<end_of_turn>") || piece.contains("</s>") || piece.contains("<|im_end|>") {
+                break;
+            }
+
             output.push_str(&piece);
 
             // Prepare next batch with just this token
@@ -144,9 +155,11 @@ impl MistralRsEngine {
         Ok(output)
     }
 
-    /// Extract JSON from a response that may contain markdown code fences.
+    /// Extract JSON from a response that may contain markdown code fences
+    /// or have JSON embedded in surrounding text.
     fn extract_json(text: &str) -> &str {
         let trimmed = text.trim();
+        // Try markdown code fences first
         if let Some(start) = trimmed.find("```json") {
             let after = &trimmed[start + 7..];
             if let Some(end) = after.find("```") {
@@ -159,47 +172,99 @@ impl MistralRsEngine {
                 return after[..end].trim();
             }
         }
+        // Try to find a JSON object by matching braces
+        if let Some(json) = Self::find_json_object(trimmed) {
+            return json;
+        }
         trimmed
+    }
+
+    /// Find the first complete JSON object `{...}` in text by matching braces.
+    fn find_json_object(text: &str) -> Option<&str> {
+        let start = text.find('{')?;
+        let mut depth = 0i32;
+        let mut in_string = false;
+        let mut escape_next = false;
+        for (i, ch) in text[start..].char_indices() {
+            if escape_next {
+                escape_next = false;
+                continue;
+            }
+            match ch {
+                '\\' if in_string => escape_next = true,
+                '"' => in_string = !in_string,
+                '{' if !in_string => depth += 1,
+                '}' if !in_string => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(&text[start..start + i + 1]);
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
     }
 }
 
 impl InferenceEngine for MistralRsEngine {
     fn annotate(&self, command_name: &str, help_text: &str) -> anyhow::Result<Annotation> {
-        let system = r#"You are a CLI documentation analyzer. Given a command name and its help text, produce a JSON object with this exact schema:
-{
-  "description": "one-line description of what the command does",
-  "intents": ["intent1", "intent2"],
-  "flags": [{"flag": "--name", "description": "what the flag does"}]
-}
-Respond with ONLY the JSON object, no other text."#;
-
-        let user_msg = format!("Command: {command_name}\n\nHelp text:\n{help_text}");
+        // Must match the Alpaca training format exactly:
+        //   instruction: "Generate a mogfish annotation for this command documentation"
+        //   input: "Command: {name}\n\n{help_text}"
+        let system = "Generate a mogfish annotation for this command documentation";
+        let user_msg = format!("Command: {command_name}\n\n{help_text}");
         let raw = self.chat(system, &user_msg)?;
+        eprintln!("[annotate] raw response ({} chars): {:?}", raw.len(), &raw[..raw.len().min(500)]);
         let json_str = Self::extract_json(&raw);
-        let ann: Annotation =
-            serde_json::from_str(json_str).context("failed to parse annotation JSON")?;
+        eprintln!("[annotate] extracted JSON: {:?}", &json_str[..json_str.len().min(500)]);
+
+        // Parse as Value first to fix flags missing the "description" field —
+        // the 1B model sometimes omits it.
+        let mut v: serde_json::Value = serde_json::from_str(json_str)
+            .with_context(|| format!("failed to parse annotation JSON from: {json_str}"))?;
+        if let Some(flags) = v.get_mut("flags").and_then(|f| f.as_array_mut()) {
+            flags.retain(|f| f.get("flag").is_some());
+            for flag in flags.iter_mut() {
+                if flag.get("description").is_none() {
+                    flag.as_object_mut()
+                        .unwrap()
+                        .insert("description".to_string(), serde_json::json!(""));
+                }
+            }
+        }
+        let ann: Annotation = serde_json::from_value(v)
+            .with_context(|| format!("failed to deserialize annotation from: {json_str}"))?;
         Ok(ann)
     }
 
     fn classify(&self, input: &str) -> anyhow::Result<Classification> {
-        let system = r#"You are an input classifier. Given user input, classify it as one of:
-- "KnownCommand" if it starts with a recognized CLI command
-- "CachedSkill" if it matches a cached skill pattern
-- "GenerateNew" if it needs new code generation
-- "Passthrough" if no action is needed
-
-Respond with ONLY a JSON object:
-{
-  "category": "KnownCommand|CachedSkill|GenerateNew|Passthrough",
-  "confidence": 0.0-1.0,
-  "command": "the command name or null"
-}"#;
+        let system = r#"Classify this input and respond with ONLY a JSON object: {"category": "KnownCommand", "confidence": 0.9, "command": "name"}"#;
 
         let raw = self.chat(system, input)?;
+        eprintln!("[classify] raw response ({} chars): {:?}", raw.len(), &raw[..raw.len().min(500)]);
         let json_str = Self::extract_json(&raw);
+        eprintln!("[classify] extracted JSON: {:?}", &json_str[..json_str.len().min(500)]);
 
-        let v: serde_json::Value =
-            serde_json::from_str(json_str).context("failed to parse classification JSON")?;
+        // The fine-tuned model may not reliably classify — parse what we can,
+        // falling back to sensible defaults if the JSON is malformed.
+        let v: serde_json::Value = match serde_json::from_str(json_str) {
+            Ok(v) => v,
+            Err(_) => {
+                // Try to find any JSON object in the response
+                if let Some(json) = Self::find_json_object(&raw) {
+                    serde_json::from_str(json)
+                        .with_context(|| format!("failed to parse classification JSON from: {json}"))?
+                } else {
+                    // Model can't classify — return a safe default
+                    return Ok(Classification {
+                        category: ClassificationCategory::Passthrough,
+                        confidence: 0.5,
+                        command: None,
+                    });
+                }
+            }
+        };
 
         let category = match v["category"].as_str().unwrap_or("Passthrough") {
             "KnownCommand" => ClassificationCategory::KnownCommand,
