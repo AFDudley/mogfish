@@ -533,6 +533,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "mogfish-classify"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "mogfish-classifier",
+ "mogfish-skill-cache",
+ "mogfish-traits",
+ "tempfile",
+]
+
+[[package]]
 name = "mogfish-engine-mistralrs"
 version = "0.1.0"
 dependencies = [

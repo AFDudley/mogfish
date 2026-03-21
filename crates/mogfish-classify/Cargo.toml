@@ -1,0 +1,20 @@
+[package]
+name = "mogfish-classify"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Fast-path classifier CLI — known commands + skill cache, no model"
+
+[[bin]]
+name = "mogfish-classify"
+path = "src/main.rs"
+
+[dependencies]
+mogfish-traits = { path = "../mogfish-traits" }
+mogfish-classifier = { path = "../classifier" }
+mogfish-skill-cache = { path = "../skill-cache" }
+anyhow.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
