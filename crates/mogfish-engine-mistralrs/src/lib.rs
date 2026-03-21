@@ -1,80 +1,147 @@
-// mogfish-engine-mistralrs — InferenceEngine backed by mistral.rs
+// mogfish-engine-mistralrs — InferenceEngine backed by llama.cpp
 //
-// Loads GGUF models via mistralrs and runs local inference for
+// Loads GGUF models via llama-cpp-4 and runs local inference for
 // annotation, classification, and Mog script generation.
 //
 // See docs/plans/mogfish-outside-in-tdd.md
 
+use std::num::NonZeroU32;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::Mutex;
 
 use anyhow::Context;
-use mistralrs::{GgufModelBuilder, Model, TextMessageRole, TextMessages};
+use llama_cpp_4::context::params::LlamaContextParams;
+use llama_cpp_4::llama_backend::LlamaBackend;
+use llama_cpp_4::llama_batch::LlamaBatch;
+use llama_cpp_4::model::params::LlamaModelParams;
+use llama_cpp_4::model::{AddBos, LlamaChatMessage, LlamaModel, Special};
+use llama_cpp_4::sampling::LlamaSampler;
 use mogfish_traits::{
     Annotation, Classification, ClassificationCategory, GroundingContext, InferenceEngine,
 };
 
-/// Inference engine backed by mistral.rs for local GGUF model inference.
+/// Maximum tokens to generate per response.
+const MAX_TOKENS: usize = 1024;
+
+/// Context window size for inference.
+const N_CTX: u32 = 2048;
+
+/// Inference engine backed by llama.cpp for local GGUF model inference.
 pub struct MistralRsEngine {
-    model: Arc<Model>,
-    runtime: tokio::runtime::Runtime,
+    backend: LlamaBackend,
+    model: LlamaModel,
+    // Mutex to serialize access — llama.cpp contexts are not thread-safe.
+    generation_lock: Mutex<()>,
 }
+
+// SAFETY: LlamaModel is Send+Sync (declared in llama-cpp-4).
+// LlamaBackend is a singleton marker. We serialize context access via Mutex.
+unsafe impl Sync for MistralRsEngine {}
 
 impl MistralRsEngine {
     /// Load a GGUF model from the given path.
-    ///
-    /// `model_path` should point to a `.gguf` file on disk.
     pub fn from_gguf(model_path: &Path) -> anyhow::Result<Self> {
         if !model_path.exists() {
             anyhow::bail!("model file not found: {}", model_path.display());
         }
 
-        let parent = model_path
-            .parent()
-            .context("model path has no parent directory")?;
-        let filename = model_path
-            .file_name()
-            .context("model path has no filename")?
-            .to_str()
-            .context("filename is not valid UTF-8")?;
-        let model_id = parent
-            .to_str()
-            .context("parent directory is not valid UTF-8")?;
+        let backend =
+            LlamaBackend::init().map_err(|e| anyhow::anyhow!("backend init failed: {e}"))?;
 
-        let runtime = tokio::runtime::Runtime::new().context("failed to create tokio runtime")?;
-
-        let model = runtime
-            .block_on(async {
-                GgufModelBuilder::new(model_id, vec![filename])
-                    .build()
-                    .await
-            })
-            .context("failed to load GGUF model")?;
+        let model_params = LlamaModelParams::default().with_n_gpu_layers(999);
+        let model = LlamaModel::load_from_file(&backend, model_path, &model_params)
+            .map_err(|e| anyhow::anyhow!("model load failed: {e}"))?;
 
         Ok(Self {
-            model: Arc::new(model),
-            runtime,
+            backend,
+            model,
+            generation_lock: Mutex::new(()),
         })
     }
 
-    /// Send a chat request and return the text content of the first choice.
+    /// Format messages using the model's chat template, create a context,
+    /// tokenize, decode, and sample until EOS or max tokens.
     fn chat(&self, system_prompt: &str, user_message: &str) -> anyhow::Result<String> {
-        let messages = TextMessages::new()
-            .add_message(TextMessageRole::System, system_prompt)
-            .add_message(TextMessageRole::User, user_message);
+        let _lock = self
+            .generation_lock
+            .lock()
+            .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
 
-        let response = self
-            .runtime
-            .block_on(async { self.model.send_chat_request(messages).await })
-            .context("chat request failed")?;
+        // Build chat messages and apply template
+        let messages = vec![
+            LlamaChatMessage::new("system".to_string(), system_prompt.to_string())
+                .map_err(|e| anyhow::anyhow!("chat message error: {e}"))?,
+            LlamaChatMessage::new("user".to_string(), user_message.to_string())
+                .map_err(|e| anyhow::anyhow!("chat message error: {e}"))?,
+        ];
 
-        let content = response
-            .choices
-            .first()
-            .and_then(|c| c.message.content.as_ref())
-            .context("no response content")?;
+        let prompt = self
+            .model
+            .apply_chat_template(None, messages, true)
+            .map_err(|e| anyhow::anyhow!("chat template error: {e}"))?;
 
-        Ok(content.to_string())
+        // Tokenize
+        let tokens = self
+            .model
+            .str_to_token(&prompt, AddBos::Never)
+            .map_err(|e| anyhow::anyhow!("tokenize error: {e}"))?;
+
+        // Create context
+        let ctx_params =
+            LlamaContextParams::default().with_n_ctx(Some(NonZeroU32::new(N_CTX).unwrap()));
+        let mut ctx = self
+            .model
+            .new_context(&self.backend, ctx_params)
+            .map_err(|e| anyhow::anyhow!("context creation failed: {e}"))?;
+
+        // Feed prompt tokens
+        let mut batch = LlamaBatch::new(N_CTX as usize, 1);
+        let last_idx = (tokens.len() - 1) as i32;
+        for (i, &token) in tokens.iter().enumerate() {
+            let is_last = i as i32 == last_idx;
+            batch
+                .add(token, i as i32, &[0], is_last)
+                .map_err(|e| anyhow::anyhow!("batch add error: {e}"))?;
+        }
+        ctx.decode(&mut batch)
+            .map_err(|e| anyhow::anyhow!("decode error: {e}"))?;
+
+        // Sample tokens
+        let mut sampler = LlamaSampler::chain_simple([
+            LlamaSampler::temp(0.1),
+            LlamaSampler::greedy(),
+        ]);
+
+        let mut output = String::new();
+        let mut n_cur = tokens.len() as i32;
+        let eos = self.model.token_eos();
+
+        for _ in 0..MAX_TOKENS {
+            let token = sampler.sample(&ctx, -1);
+            sampler.accept(token);
+
+            if token == eos {
+                break;
+            }
+
+            let piece = self
+                .model
+                .token_to_str(token, Special::Plaintext)
+                .map_err(|e| anyhow::anyhow!("token to str error: {e}"))?;
+            output.push_str(&piece);
+
+            // Prepare next batch with just this token
+            batch.clear();
+            batch
+                .add(token, n_cur, &[0], true)
+                .map_err(|e| anyhow::anyhow!("batch add error: {e}"))?;
+            ctx.decode(&mut batch)
+                .map_err(|e| anyhow::anyhow!("decode error: {e}"))?;
+
+            n_cur += 1;
+        }
+
+        Ok(output)
     }
 
     /// Extract JSON from a response that may contain markdown code fences.
@@ -131,7 +198,6 @@ Respond with ONLY a JSON object:
         let raw = self.chat(system, input)?;
         let json_str = Self::extract_json(&raw);
 
-        // Parse manually since the model returns category as a string
         let v: serde_json::Value =
             serde_json::from_str(json_str).context("failed to parse classification JSON")?;
 
