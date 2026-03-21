@@ -23,8 +23,12 @@ use mogfish_traits::{
 /// Maximum tokens to generate per response.
 const MAX_TOKENS: usize = 1024;
 
-/// Context window size for inference.
-const N_CTX: u32 = 2048;
+/// Context window size for inference (matches training max_seq_length).
+const N_CTX: u32 = 4096;
+
+/// Maximum input characters before truncation. Fish completion files
+/// can be 200KB+ (git.fish); we truncate to fit the context window.
+const MAX_INPUT_CHARS: usize = 8000;
 
 /// Which LoRA adapter to apply during inference.
 enum Adapter {
@@ -161,8 +165,9 @@ impl MistralRsEngine {
             .map_err(|e| anyhow::anyhow!("tokenize error: {e}"))?;
 
         // Create context
-        let ctx_params =
-            LlamaContextParams::default().with_n_ctx(Some(NonZeroU32::new(N_CTX).unwrap()));
+        let ctx_params = LlamaContextParams::default()
+            .with_n_ctx(Some(NonZeroU32::new(N_CTX).unwrap()))
+            .with_n_batch(N_CTX);
         let mut ctx = self
             .model
             .new_context(&self.backend, ctx_params)
@@ -319,7 +324,15 @@ impl InferenceEngine for MistralRsEngine {
         //   instruction: "Generate a mogfish annotation for this command documentation"
         //   input: "Command: {name}\n\n{help_text}"
         let system = "Generate a mogfish annotation for this command documentation";
-        let user_msg = format!("Command: {command_name}\n\n{help_text}");
+        // Truncate long inputs to fit context window — fish completion files
+        // can be 200KB+ (git.fish). The model was trained with max_seq_length=4096
+        // so inputs beyond ~8K chars were silently truncated during training anyway.
+        let truncated_help = if help_text.len() > MAX_INPUT_CHARS {
+            &help_text[..MAX_INPUT_CHARS]
+        } else {
+            help_text
+        };
+        let user_msg = format!("Command: {command_name}\n\n{truncated_help}");
         let raw = self.chat(system, &user_msg, Adapter::Annotate)?;
         eprintln!("[annotate] raw response ({} chars): {:?}", raw.len(), &raw[..raw.len().min(500)]);
         let json_str = Self::extract_json(&raw);
