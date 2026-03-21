@@ -14,14 +14,21 @@ use mogfish_traits::{ClassificationCategory, GroundingContext, InferenceEngine};
 /// and tests run in the same process, so we share a single engine.
 static ENGINE: OnceLock<MistralRsEngine> = OnceLock::new();
 
-fn test_model_path() -> Option<String> {
-    std::env::var("MOGFISH_TEST_MODEL").ok()
-}
-
 fn get_engine() -> &'static MistralRsEngine {
     ENGINE.get_or_init(|| {
-        let path = test_model_path().expect("MOGFISH_TEST_MODEL must be set");
-        MistralRsEngine::from_gguf(Path::new(&path)).expect("failed to load model")
+        let base = std::env::var("MOGFISH_TEST_MODEL").expect("MOGFISH_TEST_MODEL must be set");
+        let annotate = std::env::var("MOGFISH_ANNOTATE_ADAPTER").ok();
+        let combined = std::env::var("MOGFISH_CLASSIFY_ADAPTER").ok();
+
+        match (annotate, combined) {
+            (Some(a), Some(c)) => MistralRsEngine::from_gguf_with_adapters(
+                Path::new(&base),
+                Path::new(&a),
+                Path::new(&c),
+            )
+            .expect("failed to load model with adapters"),
+            _ => MistralRsEngine::from_gguf(Path::new(&base)).expect("failed to load model"),
+        }
     })
 }
 

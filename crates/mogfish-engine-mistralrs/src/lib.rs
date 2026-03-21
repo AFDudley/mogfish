@@ -1,7 +1,7 @@
 // mogfish-engine-mistralrs — InferenceEngine backed by llama.cpp
 //
-// Loads GGUF models via llama-cpp-4 and runs local inference for
-// annotation, classification, and Mog script generation.
+// Loads a base GGUF model via llama-cpp-4 and swaps LoRA adapters at
+// inference time for annotation, classification, and Mog script generation.
 //
 // See docs/plans/mogfish-outside-in-tdd.md
 
@@ -14,7 +14,7 @@ use llama_cpp_4::context::params::LlamaContextParams;
 use llama_cpp_4::llama_backend::LlamaBackend;
 use llama_cpp_4::llama_batch::LlamaBatch;
 use llama_cpp_4::model::params::LlamaModelParams;
-use llama_cpp_4::model::{AddBos, LlamaModel, Special};
+use llama_cpp_4::model::{AddBos, LlamaLoraAdapter, LlamaModel, Special};
 use llama_cpp_4::sampling::LlamaSampler;
 use mogfish_traits::{
     Annotation, Classification, ClassificationCategory, GroundingContext, InferenceEngine,
@@ -26,20 +26,39 @@ const MAX_TOKENS: usize = 1024;
 /// Context window size for inference.
 const N_CTX: u32 = 2048;
 
+/// Which LoRA adapter to apply during inference.
+enum Adapter {
+    /// Pass 1 annotator adapter.
+    Annotate,
+    /// Combined classify + generate_mog adapter.
+    Combined,
+}
+
 /// Inference engine backed by llama.cpp for local GGUF model inference.
+///
+/// Loads one base GGUF model and swaps LoRA adapters per-task.
 pub struct MistralRsEngine {
     backend: LlamaBackend,
     model: LlamaModel,
+    /// Pass 1 annotator LoRA adapter (None when using a merged model).
+    annotate_adapter: Option<Mutex<LlamaLoraAdapter>>,
+    /// Combined classify + generate_mog LoRA adapter (None when using a merged model).
+    combined_adapter: Option<Mutex<LlamaLoraAdapter>>,
     // Mutex to serialize access — llama.cpp contexts are not thread-safe.
     generation_lock: Mutex<()>,
 }
 
 // SAFETY: LlamaModel is Send+Sync (declared in llama-cpp-4).
-// LlamaBackend is a singleton marker. We serialize context access via Mutex.
+// LlamaBackend is a singleton marker. LlamaLoraAdapter wraps a NonNull pointer
+// to GPU-resident data tied to the model lifetime — safe to share across threads
+// when access is serialized via Mutex. We serialize all context access via generation_lock.
+unsafe impl Send for MistralRsEngine {}
 unsafe impl Sync for MistralRsEngine {}
 
 impl MistralRsEngine {
-    /// Load a GGUF model from the given path.
+    /// Load a single merged GGUF model (no adapter swapping).
+    ///
+    /// This is the legacy path — all tasks use the same merged model.
     pub fn from_gguf(model_path: &Path) -> anyhow::Result<Self> {
         if !model_path.exists() {
             anyhow::bail!("model file not found: {}", model_path.display());
@@ -55,6 +74,51 @@ impl MistralRsEngine {
         Ok(Self {
             backend,
             model,
+            annotate_adapter: None,
+            combined_adapter: None,
+            generation_lock: Mutex::new(()),
+        })
+    }
+
+    /// Load a base GGUF model with separate LoRA adapters for each task.
+    ///
+    /// - `annotate_adapter_path`: Pass 1 annotator LoRA GGUF
+    /// - `combined_adapter_path`: Combined classify + generate_mog LoRA GGUF
+    pub fn from_gguf_with_adapters(
+        base_path: &Path,
+        annotate_adapter_path: &Path,
+        combined_adapter_path: &Path,
+    ) -> anyhow::Result<Self> {
+        for (label, p) in [
+            ("base model", base_path),
+            ("annotate adapter", annotate_adapter_path),
+            ("combined adapter", combined_adapter_path),
+        ] {
+            if !p.exists() {
+                anyhow::bail!("{label} file not found: {}", p.display());
+            }
+        }
+
+        let backend =
+            LlamaBackend::init().map_err(|e| anyhow::anyhow!("backend init failed: {e}"))?;
+
+        let model_params = LlamaModelParams::default().with_n_gpu_layers(999);
+        let model = LlamaModel::load_from_file(&backend, base_path, &model_params)
+            .map_err(|e| anyhow::anyhow!("base model load failed: {e}"))?;
+
+        let annotate_adapter = model
+            .lora_adapter_init(annotate_adapter_path)
+            .map_err(|e| anyhow::anyhow!("annotate adapter load failed: {e}"))?;
+
+        let combined_adapter = model
+            .lora_adapter_init(combined_adapter_path)
+            .map_err(|e| anyhow::anyhow!("combined adapter load failed: {e}"))?;
+
+        Ok(Self {
+            backend,
+            model,
+            annotate_adapter: Some(Mutex::new(annotate_adapter)),
+            combined_adapter: Some(Mutex::new(combined_adapter)),
             generation_lock: Mutex::new(()),
         })
     }
@@ -62,9 +126,15 @@ impl MistralRsEngine {
     /// Format messages using Gemma 3 instruct format, create a context,
     /// tokenize, decode, and sample until EOS or max tokens.
     ///
-    /// The GGUF's embedded chat template is ChatML (from fine-tuning tooling)
-    /// but the model's actual vocabulary uses Gemma tokens. We format manually.
-    fn chat(&self, system_prompt: &str, user_message: &str) -> anyhow::Result<String> {
+    /// When adapters are loaded, the specified adapter is applied to the
+    /// context before inference. When using a merged model (no adapters),
+    /// the `adapter` parameter is ignored.
+    fn chat(
+        &self,
+        system_prompt: &str,
+        user_message: &str,
+        adapter: Adapter,
+    ) -> anyhow::Result<String> {
         let _lock = self
             .generation_lock
             .lock()
@@ -97,6 +167,19 @@ impl MistralRsEngine {
             .model
             .new_context(&self.backend, ctx_params)
             .map_err(|e| anyhow::anyhow!("context creation failed: {e}"))?;
+
+        // Apply LoRA adapter if loaded
+        let adapter_mutex = match adapter {
+            Adapter::Annotate => self.annotate_adapter.as_ref(),
+            Adapter::Combined => self.combined_adapter.as_ref(),
+        };
+        if let Some(mutex) = adapter_mutex {
+            let mut lora = mutex
+                .lock()
+                .map_err(|e| anyhow::anyhow!("adapter lock poisoned: {e}"))?;
+            ctx.lora_adapter_set(&mut lora, 1.0)
+                .map_err(|e| anyhow::anyhow!("adapter set failed: {e}"))?;
+        }
 
         // Feed prompt tokens
         let mut batch = LlamaBatch::new(N_CTX as usize, 1);
@@ -237,7 +320,7 @@ impl InferenceEngine for MistralRsEngine {
         //   input: "Command: {name}\n\n{help_text}"
         let system = "Generate a mogfish annotation for this command documentation";
         let user_msg = format!("Command: {command_name}\n\n{help_text}");
-        let raw = self.chat(system, &user_msg)?;
+        let raw = self.chat(system, &user_msg, Adapter::Annotate)?;
         eprintln!("[annotate] raw response ({} chars): {:?}", raw.len(), &raw[..raw.len().min(500)]);
         let json_str = Self::extract_json(&raw);
         eprintln!("[annotate] extracted JSON: {:?}", &json_str[..json_str.len().min(500)]);
@@ -264,7 +347,7 @@ impl InferenceEngine for MistralRsEngine {
     fn classify(&self, input: &str) -> anyhow::Result<Classification> {
         let system = r#"Classify this input and respond with ONLY a JSON object: {"category": "KnownCommand", "confidence": 0.9, "command": "name"}"#;
 
-        let raw = self.chat(system, input)?;
+        let raw = self.chat(system, input, Adapter::Combined)?;
         eprintln!("[classify] raw response ({} chars): {:?}", raw.len(), &raw[..raw.len().min(500)]);
         let json_str = Self::extract_json(&raw);
         eprintln!("[classify] extracted JSON: {:?}", &json_str[..json_str.len().min(500)]);
@@ -322,6 +405,6 @@ impl InferenceEngine for MistralRsEngine {
             "Intent: {intent}\nAvailable commands: {commands_list}\nWorking directory: {cwd}"
         );
 
-        self.chat(system, &user_msg)
+        self.chat(system, &user_msg, Adapter::Combined)
     }
 }
