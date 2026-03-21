@@ -1,0 +1,20 @@
+// gh — GitHub CLI capability
+// Typed interface to GitHub PR, issue, repo, and run operations.
+
+capability gh {
+  // Pull requests
+  async fn pr_create(title: string, body: string) -> string
+  async fn pr_list(state: string) -> string
+  async fn pr_view(number: int) -> string
+
+  // Issues
+  async fn issue_create(title: string, body: string) -> string
+  async fn issue_list(state: string) -> string
+
+  // Repository
+  async fn repo_clone(repo: string, dir: string) -> int
+
+  // CI / Actions
+  async fn run_list(workflow: string) -> string
+  async fn run_view(run_id: int) -> string
+}

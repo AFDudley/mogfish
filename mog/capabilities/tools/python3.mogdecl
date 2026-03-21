@@ -1,0 +1,28 @@
+// python3 — Python script execution capability
+// Wraps python3 for running scripts and evaluating expressions.
+
+capability python3 {
+  // Run a Python script file, returns stdout
+  async fn run_script(path: string) -> string
+
+  // Run a Python script with arguments
+  async fn run_script_args(path: string, args: string) -> string
+
+  // Evaluate a Python expression, returns result as string
+  fn eval(expression: string) -> string
+
+  // Execute Python code string, returns stdout
+  fn exec(code: string) -> string
+
+  // Run a Python module (python3 -m module)
+  async fn run_module(module: string, args: string) -> string
+
+  // Check Python version
+  fn version() -> string
+
+  // Install a package with pip
+  async fn pip_install(package: string) -> string
+
+  // List installed packages
+  fn pip_list() -> string
+}

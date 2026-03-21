@@ -1,0 +1,25 @@
+// grep — Text search capability (POSIX host)
+// Provides pattern matching and search operations on files.
+
+capability grep {
+  // Search for pattern in file, return matching lines
+  fn search(pattern: string, path: string) -> string
+
+  // Recursively search directory for pattern, return matching lines
+  async fn search_recursive(pattern: string, dir: string) -> string
+
+  // Count occurrences of pattern in file
+  fn count(pattern: string, path: string) -> int
+
+  // Return filenames containing pattern in directory
+  fn files_matching(pattern: string, dir: string) -> string
+
+  // Search with fixed string (no regex), return matching lines
+  fn search_fixed(literal: string, path: string) -> string
+
+  // Return lines NOT matching pattern
+  fn invert_match(pattern: string, path: string) -> string
+
+  // Search for pattern and return matches with line numbers
+  fn search_numbered(pattern: string, path: string) -> string
+}

@@ -1,0 +1,19 @@
+// jq — JSON processing capability (wraps jq CLI)
+// Provides structured JSON query and transformation operations.
+
+capability jq {
+  // Run a jq query expression against a JSON string, returns result
+  fn query(expr: string, json: string) -> string
+
+  // Filter a JSON array by a jq predicate, returns filtered array
+  fn filter(expr: string, json: string) -> string
+
+  // Transform JSON using a jq mapping expression, returns result
+  fn transform(expr: string, json: string) -> string
+
+  // Extract all keys from a JSON object, returns JSON array of keys
+  fn keys(json: string) -> string
+
+  // Extract all values from a JSON object, returns JSON array of values
+  fn values(json: string) -> string
+}

@@ -1,0 +1,24 @@
+// git — Version control capability (git CLI)
+// Provides typed access to common git operations.
+
+capability git {
+  // Working tree
+  fn status() -> string
+  fn diff() -> string
+  fn add(path: string) -> int
+  fn commit(message: string) -> string
+
+  // Branching
+  fn branch() -> string
+  fn checkout(ref_name: string) -> int
+  fn merge(branch: string) -> string
+  fn rebase(upstream: string) -> string
+  fn stash(action: string) -> string
+
+  // History
+  fn log(args: string) -> string
+
+  // Remote (network)
+  async fn push(remote: string, branch: string) -> string
+  async fn pull(remote: string, branch: string) -> string
+}

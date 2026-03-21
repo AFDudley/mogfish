@@ -1,0 +1,28 @@
+// sed — Text transformation capability (POSIX host)
+// Provides in-place and streaming text substitution and editing.
+
+capability sed {
+  // Substitute first match of pattern with replacement in string
+  fn substitute(pattern: string, replacement: string, text: string) -> string
+
+  // Substitute all matches of pattern with replacement in string
+  fn substitute_all(pattern: string, replacement: string, text: string) -> string
+
+  // Delete lines matching pattern from text
+  fn delete_matching(pattern: string, text: string) -> string
+
+  // Insert text before lines matching pattern
+  fn insert_before(pattern: string, insertion: string, text: string) -> string
+
+  // Insert text after lines matching pattern
+  fn insert_after(pattern: string, insertion: string, text: string) -> string
+
+  // Extract lines between start and end patterns (inclusive)
+  fn extract_range(start_pattern: string, end_pattern: string, text: string) -> string
+
+  // Apply substitution to a file, return modified contents
+  fn substitute_in_file(pattern: string, replacement: string, path: string) -> string
+
+  // Replace all occurrences in a file, return modified contents
+  fn substitute_all_in_file(pattern: string, replacement: string, path: string) -> string
+}

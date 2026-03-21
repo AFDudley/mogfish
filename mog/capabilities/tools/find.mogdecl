@@ -1,0 +1,28 @@
+// find — File discovery capability (POSIX host)
+// Provides file and directory search operations by various criteria.
+
+capability find {
+  // Find files by name glob pattern in directory
+  async fn by_name(pattern: string, dir: string) -> string
+
+  // Find entries by type: "f" (file), "d" (directory), "l" (symlink)
+  async fn by_type(entry_type: string, dir: string) -> string
+
+  // Find files larger than size_bytes
+  async fn by_min_size(size_bytes: int, dir: string) -> string
+
+  // Find files smaller than size_bytes
+  async fn by_max_size(size_bytes: int, dir: string) -> string
+
+  // Find files modified within last n seconds
+  async fn modified_within(seconds: int, dir: string) -> string
+
+  // Find files modified more than n seconds ago
+  async fn modified_before(seconds: int, dir: string) -> string
+
+  // Find files matching name pattern of a specific type
+  async fn by_name_and_type(pattern: string, entry_type: string, dir: string) -> string
+
+  // Count entries matching name pattern in directory
+  async fn count(pattern: string, dir: string) -> int
+}

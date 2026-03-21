@@ -1,0 +1,22 @@
+// cargo — Rust build system capability (wraps cargo CLI)
+// Provides Rust project build, test, and quality operations.
+
+capability cargo {
+  // Build the project, returns exit code
+  async fn build(path: string) -> int
+
+  // Run tests, returns exit code
+  async fn test(path: string) -> int
+
+  // Run cargo check (type-check without building), returns exit code
+  async fn check(path: string) -> int
+
+  // Run clippy lints, returns output as string
+  async fn clippy(path: string) -> string
+
+  // Run a binary target, returns stdout
+  async fn run(path: string, args: string) -> string
+
+  // Run cargo fmt (format code), returns exit code
+  async fn fmt(path: string) -> int
+}

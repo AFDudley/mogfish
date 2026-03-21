@@ -1,0 +1,22 @@
+// yq — YAML processing capability
+// Wraps yq for querying and transforming YAML data.
+
+capability yq {
+  // Apply yq expression to YAML string
+  fn query(yaml: string, expr: string) -> string
+
+  // Extract value by path
+  fn get(yaml: string, path: string) -> string
+
+  // Convert YAML to JSON
+  fn to_json(yaml: string) -> string
+
+  // Convert JSON to YAML
+  fn from_json(json: string) -> string
+
+  // Set a value at path in YAML document
+  fn set(yaml: string, path: string, value: string) -> string
+
+  // Delete a key from YAML
+  fn delete_key(yaml: string, path: string) -> string
+}
