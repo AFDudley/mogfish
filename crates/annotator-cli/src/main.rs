@@ -124,21 +124,11 @@ fn make_engine(name: &str) -> anyhow::Result<Box<dyn mogfish_traits::InferenceEn
     match name {
         "mock" => Ok(Box::new(mogfish_traits::MockInferenceEngine::new())),
         "mistralrs" => {
-            let model_path = std::env::var("MOGFISH_MODEL_PATH")
-                .map_err(|_| anyhow::anyhow!("MOGFISH_MODEL_PATH must be set for mistralrs engine"))?;
-            let annotate_adapter = std::env::var("MOGFISH_ANNOTATE_ADAPTER").ok();
-            let classify_adapter = std::env::var("MOGFISH_CLASSIFY_ADAPTER").ok();
+            let model_id = std::env::var("MOGFISH_MODEL_ID")
+                .or_else(|_| std::env::var("MOGFISH_MODEL_PATH"))
+                .map_err(|_| anyhow::anyhow!("MOGFISH_MODEL_ID or MOGFISH_MODEL_PATH must be set for mistralrs engine"))?;
 
-            let engine = match (annotate_adapter, classify_adapter) {
-                (Some(a), Some(c)) => mogfish_engine_mistralrs::MistralRsEngine::from_gguf_with_adapters(
-                    std::path::Path::new(&model_path),
-                    std::path::Path::new(&a),
-                    std::path::Path::new(&c),
-                )?,
-                _ => mogfish_engine_mistralrs::MistralRsEngine::from_gguf(
-                    std::path::Path::new(&model_path),
-                )?,
-            };
+            let engine = mogfish_engine_mistralrs::MistralRsEngine::from_hf_model(&model_id)?;
             Ok(Box::new(engine))
         }
         other => anyhow::bail!("unknown engine: {other}"),

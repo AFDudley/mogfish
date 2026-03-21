@@ -1,347 +1,186 @@
-// mogfish-engine-mistralrs — InferenceEngine backed by llama.cpp
+// mogfish-engine-mistralrs — InferenceEngine backed by mistral.rs
 //
-// Loads a base GGUF model via llama-cpp-4 and swaps LoRA adapters at
-// inference time for annotation, classification, and Mog script generation.
+// Loads a HuggingFace safetensors model via mistral.rs with ISQ (in-situ
+// quantization) at load time. Uses native JSON schema constraints for
+// structured output (annotation, classification) and free-form generation
+// for Mog scripts.
 //
 // See docs/plans/mogfish-outside-in-tdd.md
 
-use std::num::NonZeroU32;
 use std::path::Path;
-use std::sync::Mutex;
 
 use anyhow::Context;
-use llama_cpp_4::context::params::LlamaContextParams;
-use llama_cpp_4::llama_backend::LlamaBackend;
-use llama_cpp_4::llama_batch::LlamaBatch;
-use llama_cpp_4::model::params::LlamaModelParams;
-use llama_cpp_4::model::{AddBos, LlamaLoraAdapter, LlamaModel, Special};
-use llama_cpp_4::sampling::LlamaSampler;
+use mistralrs::blocking::BlockingModel;
+use mistralrs::{
+    Constraint, IsqType, ModelBuilder, RequestBuilder, TextMessageRole, TextMessages,
+};
 use mogfish_traits::{
     Annotation, Classification, ClassificationCategory, GroundingContext, InferenceEngine,
 };
-
-/// Maximum tokens to generate per response.
-const MAX_TOKENS: usize = 1024;
-
-/// Context window size for inference (matches training max_seq_length).
-const N_CTX: u32 = 4096;
 
 /// Maximum input characters before truncation. Fish completion files
 /// can be 200KB+ (git.fish); we truncate to fit the context window.
 const MAX_INPUT_CHARS: usize = 8000;
 
-/// Which LoRA adapter to apply during inference.
-enum Adapter {
-    /// Pass 1 annotator adapter.
-    Annotate,
-    /// Combined classify + generate_mog adapter.
-    Combined,
-}
-
-/// Inference engine backed by llama.cpp for local GGUF model inference.
+/// Inference engine backed by mistral.rs for local safetensors inference.
 ///
-/// Loads one base GGUF model and swaps LoRA adapters per-task.
+/// Uses `BlockingModel` which owns a tokio runtime internally, bridging
+/// the async mistral.rs API to the sync `InferenceEngine` trait.
 pub struct MistralRsEngine {
-    backend: LlamaBackend,
-    model: LlamaModel,
-    /// Pass 1 annotator LoRA adapter (None when using a merged model).
-    annotate_adapter: Option<Mutex<LlamaLoraAdapter>>,
-    /// Combined classify + generate_mog LoRA adapter (None when using a merged model).
-    combined_adapter: Option<Mutex<LlamaLoraAdapter>>,
-    // Mutex to serialize access — llama.cpp contexts are not thread-safe.
-    generation_lock: Mutex<()>,
+    model: BlockingModel,
 }
 
-// SAFETY: LlamaModel is Send+Sync (declared in llama-cpp-4).
-// LlamaBackend is a singleton marker. LlamaLoraAdapter wraps a NonNull pointer
-// to GPU-resident data tied to the model lifetime — safe to share across threads
-// when access is serialized via Mutex. We serialize all context access via generation_lock.
+// BlockingModel owns Arc<Runtime> + Arc<MistralRs>, both Send+Sync.
 unsafe impl Send for MistralRsEngine {}
 unsafe impl Sync for MistralRsEngine {}
 
 impl MistralRsEngine {
-    /// Load a single merged GGUF model (no adapter swapping).
+    /// Load a HuggingFace model (local path or HF model ID) with ISQ Q4K quantization.
     ///
-    /// This is the legacy path — all tasks use the same merged model.
-    pub fn from_gguf(model_path: &Path) -> anyhow::Result<Self> {
-        if !model_path.exists() {
-            anyhow::bail!("model file not found: {}", model_path.display());
-        }
+    /// `model_id` can be:
+    /// - A HuggingFace model ID like `"unsloth/gemma-3-1b-it"` (downloaded automatically)
+    /// - A local path to a directory containing safetensors + config.json + tokenizer.json
+    pub fn from_hf_model(model_id: &str) -> anyhow::Result<Self> {
+        let builder = ModelBuilder::new(model_id)
+            .with_isq(IsqType::Q4K)
+            .with_logging();
 
-        let backend =
-            LlamaBackend::init().map_err(|e| anyhow::anyhow!("backend init failed: {e}"))?;
-
-        let model_params = LlamaModelParams::default().with_n_gpu_layers(999);
-        let model = LlamaModel::load_from_file(&backend, model_path, &model_params)
+        let model = BlockingModel::from_auto_builder(builder)
             .map_err(|e| anyhow::anyhow!("model load failed: {e}"))?;
 
-        Ok(Self {
-            backend,
-            model,
-            annotate_adapter: None,
-            combined_adapter: None,
-            generation_lock: Mutex::new(()),
-        })
+        Ok(Self { model })
     }
 
-    /// Load a base GGUF model with separate LoRA adapters for each task.
-    ///
-    /// - `annotate_adapter_path`: Pass 1 annotator LoRA GGUF
-    /// - `combined_adapter_path`: Combined classify + generate_mog LoRA GGUF
-    pub fn from_gguf_with_adapters(
-        base_path: &Path,
-        annotate_adapter_path: &Path,
-        combined_adapter_path: &Path,
-    ) -> anyhow::Result<Self> {
-        for (label, p) in [
-            ("base model", base_path),
-            ("annotate adapter", annotate_adapter_path),
-            ("combined adapter", combined_adapter_path),
-        ] {
-            if !p.exists() {
-                anyhow::bail!("{label} file not found: {}", p.display());
-            }
+    /// Load from a local directory path, verifying it exists first.
+    pub fn from_local_model(model_path: &Path) -> anyhow::Result<Self> {
+        if !model_path.exists() {
+            anyhow::bail!("model directory not found: {}", model_path.display());
         }
+        Self::from_hf_model(&model_path.to_string_lossy())
+    }
 
-        let backend =
-            LlamaBackend::init().map_err(|e| anyhow::anyhow!("backend init failed: {e}"))?;
-
-        let model_params = LlamaModelParams::default().with_n_gpu_layers(999);
-        let model = LlamaModel::load_from_file(&backend, base_path, &model_params)
-            .map_err(|e| anyhow::anyhow!("base model load failed: {e}"))?;
-
-        let annotate_adapter = model
-            .lora_adapter_init(annotate_adapter_path)
-            .map_err(|e| anyhow::anyhow!("annotate adapter load failed: {e}"))?;
-
-        let combined_adapter = model
-            .lora_adapter_init(combined_adapter_path)
-            .map_err(|e| anyhow::anyhow!("combined adapter load failed: {e}"))?;
-
-        Ok(Self {
-            backend,
-            model,
-            annotate_adapter: Some(Mutex::new(annotate_adapter)),
-            combined_adapter: Some(Mutex::new(combined_adapter)),
-            generation_lock: Mutex::new(()),
+    /// Build the annotation JSON schema as a serde_json::Value.
+    fn annotation_schema() -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "description": { "type": "string" },
+                "intents": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                },
+                "flags": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "flag": { "type": "string" },
+                            "description": { "type": "string" }
+                        },
+                        "required": ["flag", "description"]
+                    }
+                }
+            },
+            "required": ["description", "intents", "flags"]
         })
     }
 
-    /// Format messages using Gemma 3 instruct format, create a context,
-    /// tokenize, decode, and sample until EOS or max tokens.
-    ///
-    /// When adapters are loaded, the specified adapter is applied to the
-    /// context before inference. When using a merged model (no adapters),
-    /// the `adapter` parameter is ignored.
-    fn chat(
+    /// Build the classification JSON schema as a serde_json::Value.
+    fn classification_schema() -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "category": {
+                    "type": "string",
+                    "enum": ["KnownCommand", "CachedSkill", "GenerateNew", "Passthrough", "Escalate"]
+                },
+                "confidence": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
+                "command": { "type": ["string", "null"] }
+            },
+            "required": ["category", "confidence"]
+        })
+    }
+
+    /// Send a constrained chat request and return the raw response text.
+    fn chat_constrained(
         &self,
         system_prompt: &str,
         user_message: &str,
-        adapter: Adapter,
+        schema: serde_json::Value,
     ) -> anyhow::Result<String> {
-        let _lock = self
-            .generation_lock
-            .lock()
-            .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
+        let messages: RequestBuilder = TextMessages::new()
+            .add_message(TextMessageRole::System, system_prompt)
+            .add_message(TextMessageRole::User, user_message)
+            .into();
 
-        // Gemma 3 instruct format — combine instruction (system) + input (user)
-        // into the user turn, matching the Alpaca fine-tuning data layout.
-        let prompt = if system_prompt.is_empty() {
-            format!(
-                "<start_of_turn>user\n{user_message}<end_of_turn>\n<start_of_turn>model\n"
-            )
-        } else {
-            format!(
-                "<start_of_turn>user\n{system_prompt}\n\n{user_message}<end_of_turn>\n<start_of_turn>model\n"
-            )
-        };
+        let request = messages
+            .set_constraint(Constraint::JsonSchema(schema))
+            .set_sampler_temperature(0.1)
+            .set_sampler_max_len(1024);
 
-        eprintln!("[chat] prompt ({} chars): {:?}", prompt.len(), &prompt[..prompt.len().min(500)]);
-
-        // Tokenize
-        let tokens = self
+        let response = self
             .model
-            .str_to_token(&prompt, AddBos::Never)
-            .map_err(|e| anyhow::anyhow!("tokenize error: {e}"))?;
+            .send_chat_request(request)
+            .map_err(|e| anyhow::anyhow!("inference failed: {e}"))?;
 
-        // Create context
-        let ctx_params = LlamaContextParams::default()
-            .with_n_ctx(Some(NonZeroU32::new(N_CTX).unwrap()))
-            .with_n_batch(N_CTX);
-        let mut ctx = self
-            .model
-            .new_context(&self.backend, ctx_params)
-            .map_err(|e| anyhow::anyhow!("context creation failed: {e}"))?;
-
-        // Apply LoRA adapter if loaded
-        let adapter_mutex = match adapter {
-            Adapter::Annotate => self.annotate_adapter.as_ref(),
-            Adapter::Combined => self.combined_adapter.as_ref(),
-        };
-        if let Some(mutex) = adapter_mutex {
-            let mut lora = mutex
-                .lock()
-                .map_err(|e| anyhow::anyhow!("adapter lock poisoned: {e}"))?;
-            ctx.lora_adapter_set(&mut lora, 1.0)
-                .map_err(|e| anyhow::anyhow!("adapter set failed: {e}"))?;
-        }
-
-        // Feed prompt tokens
-        let mut batch = LlamaBatch::new(N_CTX as usize, 1);
-        let last_idx = (tokens.len() - 1) as i32;
-        for (i, &token) in tokens.iter().enumerate() {
-            let is_last = i as i32 == last_idx;
-            batch
-                .add(token, i as i32, &[0], is_last)
-                .map_err(|e| anyhow::anyhow!("batch add error: {e}"))?;
-        }
-        ctx.decode(&mut batch)
-            .map_err(|e| anyhow::anyhow!("decode error: {e}"))?;
-
-        // Sample tokens
-        let mut sampler = LlamaSampler::chain_simple([
-            LlamaSampler::temp(0.1),
-            LlamaSampler::greedy(),
-        ]);
-
-        let mut output = String::new();
-        let mut n_cur = tokens.len() as i32;
-        let eos = self.model.token_eos();
-
-        for _ in 0..MAX_TOKENS {
-            let token = sampler.sample(&ctx, -1);
-            sampler.accept(token);
-
-            if token == eos {
-                break;
-            }
-
-            // Use Special::Tokenize to see special tokens, then filter them
-            let piece = self
-                .model
-                .token_to_str(token, Special::Tokenize)
-                .map_err(|e| anyhow::anyhow!("token to str error: {e}"))?;
-
-            // Stop on any end-of-generation marker
-            if piece.contains("<end_of_turn>") || piece.contains("</s>") || piece.contains("<|im_end|>") {
-                break;
-            }
-
-            output.push_str(&piece);
-
-            // Prepare next batch with just this token
-            batch.clear();
-            batch
-                .add(token, n_cur, &[0], true)
-                .map_err(|e| anyhow::anyhow!("batch add error: {e}"))?;
-            ctx.decode(&mut batch)
-                .map_err(|e| anyhow::anyhow!("decode error: {e}"))?;
-
-            n_cur += 1;
-        }
-
-        // Clean SentencePiece artifacts from MLX-trained models:
-        // - U+2581 (▁) space markers
-        // - [UNK_BYTE_0xe29681...] strings that llama.cpp emits for unknown tokens
-        let output = output.replace('\u{2581}', " ");
-        // Strip [UNK_BYTE_0xe29681 X] patterns — keep the X (the actual content after the space)
-        let mut cleaned = String::with_capacity(output.len());
-        let mut chars = output.chars().peekable();
-        while let Some(c) = chars.next() {
-            if c == '[' {
-                // Check for [UNK_BYTE_0xe29681 ...]
-                let rest: String = chars.clone().take(20).collect();
-                if rest.starts_with("UNK_BYTE_0xe29681") {
-                    // Skip past the closing ]
-                    while let Some(ch) = chars.next() {
-                        if ch == ']' {
-                            break;
-                        }
-                    }
-                    continue;
-                }
-            }
-            cleaned.push(c);
-        }
-        Ok(cleaned)
+        response
+            .choices
+            .into_iter()
+            .next()
+            .and_then(|c| c.message.content)
+            .ok_or_else(|| anyhow::anyhow!("empty response from model"))
     }
 
-    /// Extract JSON from a response that may contain markdown code fences
-    /// or have JSON embedded in surrounding text.
-    fn extract_json(text: &str) -> &str {
-        let trimmed = text.trim();
-        // Try markdown code fences first
-        if let Some(start) = trimmed.find("```json") {
-            let after = &trimmed[start + 7..];
-            if let Some(end) = after.find("```") {
-                return after[..end].trim();
-            }
-        }
-        if let Some(start) = trimmed.find("```") {
-            let after = &trimmed[start + 3..];
-            if let Some(end) = after.find("```") {
-                return after[..end].trim();
-            }
-        }
-        // Try to find a JSON object by matching braces
-        if let Some(json) = Self::find_json_object(trimmed) {
-            return json;
-        }
-        trimmed
-    }
+    /// Send an unconstrained chat request and return the raw response text.
+    fn chat_free(
+        &self,
+        system_prompt: &str,
+        user_message: &str,
+    ) -> anyhow::Result<String> {
+        let messages: RequestBuilder = TextMessages::new()
+            .add_message(TextMessageRole::System, system_prompt)
+            .add_message(TextMessageRole::User, user_message)
+            .into();
 
-    /// Find the first complete JSON object `{...}` in text by matching braces.
-    fn find_json_object(text: &str) -> Option<&str> {
-        let start = text.find('{')?;
-        let mut depth = 0i32;
-        let mut in_string = false;
-        let mut escape_next = false;
-        for (i, ch) in text[start..].char_indices() {
-            if escape_next {
-                escape_next = false;
-                continue;
-            }
-            match ch {
-                '\\' if in_string => escape_next = true,
-                '"' => in_string = !in_string,
-                '{' if !in_string => depth += 1,
-                '}' if !in_string => {
-                    depth -= 1;
-                    if depth == 0 {
-                        return Some(&text[start..start + i + 1]);
-                    }
-                }
-                _ => {}
-            }
-        }
-        None
+        let request = messages
+            .set_sampler_temperature(0.1)
+            .set_sampler_max_len(1024);
+
+        let response = self
+            .model
+            .send_chat_request(request)
+            .map_err(|e| anyhow::anyhow!("inference failed: {e}"))?;
+
+        response
+            .choices
+            .into_iter()
+            .next()
+            .and_then(|c| c.message.content)
+            .ok_or_else(|| anyhow::anyhow!("empty response from model"))
     }
 }
 
 impl InferenceEngine for MistralRsEngine {
     fn annotate(&self, command_name: &str, help_text: &str) -> anyhow::Result<Annotation> {
-        // Must match the Alpaca training format exactly:
-        //   instruction: "Generate a mogfish annotation for this command documentation"
-        //   input: "Command: {name}\n\n{help_text}"
         let system = "Generate a mogfish annotation for this command documentation";
-        // Truncate long inputs to fit context window — fish completion files
-        // can be 200KB+ (git.fish). The model was trained with max_seq_length=4096
-        // so inputs beyond ~8K chars were silently truncated during training anyway.
         let truncated_help = if help_text.len() > MAX_INPUT_CHARS {
             &help_text[..MAX_INPUT_CHARS]
         } else {
             help_text
         };
         let user_msg = format!("Command: {command_name}\n\n{truncated_help}");
-        let raw = self.chat(system, &user_msg, Adapter::Annotate)?;
-        eprintln!("[annotate] raw response ({} chars): {:?}", raw.len(), &raw[..raw.len().min(500)]);
-        let json_str = Self::extract_json(&raw);
-        eprintln!("[annotate] extracted JSON: {:?}", &json_str[..json_str.len().min(500)]);
 
-        // Parse as Value first to fix flags missing the "description" field —
-        // the 1B model sometimes omits it.
-        let mut v: serde_json::Value = serde_json::from_str(json_str)
-            .with_context(|| format!("failed to parse annotation JSON from: {json_str}"))?;
+        let raw = self.chat_constrained(system, &user_msg, Self::annotation_schema())?;
+        eprintln!(
+            "[annotate] response ({} chars): {:?}",
+            raw.len(),
+            &raw[..raw.len().min(500)]
+        );
+
+        let mut v: serde_json::Value = serde_json::from_str(&raw)
+            .with_context(|| format!("failed to parse annotation JSON from: {raw}"))?;
+
+        // Fix flags missing the "description" field — the 1B model sometimes omits it
         if let Some(flags) = v.get_mut("flags").and_then(|f| f.as_array_mut()) {
             flags.retain(|f| f.get("flag").is_some());
             for flag in flags.iter_mut() {
@@ -352,43 +191,30 @@ impl InferenceEngine for MistralRsEngine {
                 }
             }
         }
+
         let ann: Annotation = serde_json::from_value(v)
-            .with_context(|| format!("failed to deserialize annotation from: {json_str}"))?;
+            .with_context(|| format!("failed to deserialize annotation from: {raw}"))?;
         Ok(ann)
     }
 
     fn classify(&self, input: &str) -> anyhow::Result<Classification> {
         let system = r#"Classify this input and respond with ONLY a JSON object: {"category": "KnownCommand", "confidence": 0.9, "command": "name"}"#;
 
-        let raw = self.chat(system, input, Adapter::Combined)?;
-        eprintln!("[classify] raw response ({} chars): {:?}", raw.len(), &raw[..raw.len().min(500)]);
-        let json_str = Self::extract_json(&raw);
-        eprintln!("[classify] extracted JSON: {:?}", &json_str[..json_str.len().min(500)]);
+        let raw = self.chat_constrained(system, input, Self::classification_schema())?;
+        eprintln!(
+            "[classify] response ({} chars): {:?}",
+            raw.len(),
+            &raw[..raw.len().min(500)]
+        );
 
-        // The fine-tuned model may not reliably classify — parse what we can,
-        // falling back to sensible defaults if the JSON is malformed.
-        let v: serde_json::Value = match serde_json::from_str(json_str) {
-            Ok(v) => v,
-            Err(_) => {
-                // Try to find any JSON object in the response
-                if let Some(json) = Self::find_json_object(&raw) {
-                    serde_json::from_str(json)
-                        .with_context(|| format!("failed to parse classification JSON from: {json}"))?
-                } else {
-                    // Model can't classify — return a safe default
-                    return Ok(Classification {
-                        category: ClassificationCategory::Passthrough,
-                        confidence: 0.5,
-                        command: None,
-                    });
-                }
-            }
-        };
+        let v: serde_json::Value = serde_json::from_str(&raw)
+            .with_context(|| format!("failed to parse classification JSON from: {raw}"))?;
 
         let category = match v["category"].as_str().unwrap_or("Passthrough") {
             "KnownCommand" => ClassificationCategory::KnownCommand,
             "CachedSkill" => ClassificationCategory::CachedSkill,
             "GenerateNew" => ClassificationCategory::GenerateNew,
+            "Escalate" => ClassificationCategory::Escalate,
             _ => ClassificationCategory::Passthrough,
         };
 
@@ -418,6 +244,6 @@ impl InferenceEngine for MistralRsEngine {
             "Intent: {intent}\nAvailable commands: {commands_list}\nWorking directory: {cwd}"
         );
 
-        self.chat(system, &user_msg, Adapter::Combined)
+        self.chat_free(system, &user_msg)
     }
 }

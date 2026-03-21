@@ -4,31 +4,20 @@
 // InferenceEngine trait. Tests that require a real model are gated
 // behind MOGFISH_TEST_MODEL env var and marked #[ignore].
 
-use std::path::Path;
 use std::sync::OnceLock;
 
 use mogfish_engine_mistralrs::MistralRsEngine;
 use mogfish_traits::{ClassificationCategory, GroundingContext, InferenceEngine};
 
-/// Shared engine instance — LlamaBackend can only be initialized once per process,
-/// and tests run in the same process, so we share a single engine.
+/// Shared engine instance — mistral.rs model loading is expensive,
+/// so we share a single engine across all tests in this process.
 static ENGINE: OnceLock<MistralRsEngine> = OnceLock::new();
 
 fn get_engine() -> &'static MistralRsEngine {
     ENGINE.get_or_init(|| {
-        let base = std::env::var("MOGFISH_TEST_MODEL").expect("MOGFISH_TEST_MODEL must be set");
-        let annotate = std::env::var("MOGFISH_ANNOTATE_ADAPTER").ok();
-        let combined = std::env::var("MOGFISH_CLASSIFY_ADAPTER").ok();
-
-        match (annotate, combined) {
-            (Some(a), Some(c)) => MistralRsEngine::from_gguf_with_adapters(
-                Path::new(&base),
-                Path::new(&a),
-                Path::new(&c),
-            )
-            .expect("failed to load model with adapters"),
-            _ => MistralRsEngine::from_gguf(Path::new(&base)).expect("failed to load model"),
-        }
+        let model_id =
+            std::env::var("MOGFISH_TEST_MODEL").expect("MOGFISH_TEST_MODEL must be set");
+        MistralRsEngine::from_hf_model(&model_id).expect("failed to load model")
     })
 }
 
@@ -41,14 +30,12 @@ fn engine_is_send_sync() {
 }
 
 #[test]
-fn from_gguf_rejects_missing_file() {
-    // This test cannot call from_gguf because it would try to init the backend,
-    // conflicting with the shared engine. Just verify the path check.
-    let path = Path::new("/nonexistent/model.gguf");
+fn from_local_model_rejects_missing_dir() {
+    let path = std::path::Path::new("/nonexistent/model");
     assert!(!path.exists());
 }
 
-// -- Integration tests (require a GGUF model) --
+// -- Integration tests (require a HF model) --
 
 #[test]
 #[ignore]

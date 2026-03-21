@@ -4,14 +4,16 @@ version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "InferenceEngine backed by llama.cpp for local GGUF model inference"
+description = "InferenceEngine backed by mistral.rs for local HF safetensors inference"
 
 [dependencies]
 mogfish-traits = { path = "../mogfish-traits" }
-llama-cpp-4 = { version = "0.2.12", features = ["cuda"] }
+mistralrs = { git = "https://github.com/EricLBuehler/mistral.rs.git", rev = "8368da99c91d", features = ["cuda"] }
 serde_json.workspace = true
+serde = { workspace = true, features = ["derive"] }
 anyhow.workspace = true
 tracing.workspace = true
+schemars = "0.8"
 
 [dev-dependencies]
 tempfile.workspace = true
