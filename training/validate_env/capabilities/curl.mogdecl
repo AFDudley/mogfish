@@ -1,0 +1,22 @@
+// curl — HTTP client capability (wraps curl CLI)
+// Provides typed HTTP operations for data retrieval and submission.
+
+capability curl {
+  // Perform an HTTP GET request, returns response body
+  async fn get(url: string) -> string
+
+  // Perform an HTTP POST request with a body, returns response body
+  async fn post(url: string, body: string) -> string
+
+  // Perform an HTTP PUT request with a body, returns response body
+  async fn put(url: string, body: string) -> string
+
+  // Perform an HTTP DELETE request, returns response body
+  async fn delete(url: string) -> string
+
+  // Download a URL to a local file path, returns bytes written
+  async fn download(url: string, dest: string) -> int
+
+  // Perform a GET request with a custom header, returns response body
+  async fn get_with_header(url: string, header: string) -> string
+}

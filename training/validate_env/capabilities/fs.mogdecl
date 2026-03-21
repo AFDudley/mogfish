@@ -1,0 +1,23 @@
+// fs — File system capability (POSIX host)
+// Provides file I/O operations. All functions are synchronous
+// but wrapped in async to match the spec.
+
+capability fs {
+  // Read entire file contents as string
+  fn read_file(path: string) -> string
+  
+  // Write string contents to file (creates or overwrites)
+  fn write_file(path: string, contents: string) -> int
+  
+  // Append string contents to file
+  fn append_file(path: string, contents: string) -> int
+  
+  // Check if file exists
+  fn exists(path: string) -> bool
+  
+  // Delete a file
+  fn remove(path: string) -> int
+  
+  // Get file size in bytes
+  fn file_size(path: string) -> int
+}

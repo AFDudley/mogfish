@@ -1,0 +1,6 @@
+requires grep;
+async fn main() -> i64 {
+  result: string = await grep.search("ERROR", "/tmp/test.log");
+  println(result);
+  return 0;
+}

@@ -1,0 +1,8 @@
+requires jq;
+requires fs;
+async fn main() -> i64 {
+  json: string = await fs.read_file("data.json");
+  result: string = jq.query(".name", json);
+  println(result);
+  return 0;
+}

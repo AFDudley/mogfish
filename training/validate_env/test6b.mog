@@ -1,0 +1,6 @@
+requires curl;
+async fn main() -> i64 {
+  result: string = await curl.post("https://example.com/api", "hello");
+  println(result);
+  return 0;
+}

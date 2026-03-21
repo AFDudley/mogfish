@@ -1,0 +1,6 @@
+requires gh;
+async fn main() -> i64 {
+  result: string = await gh.run_view(23277897599);
+  println(result);
+  return 0;
+}

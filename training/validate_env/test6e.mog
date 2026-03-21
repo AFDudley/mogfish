@@ -1,0 +1,7 @@
+requires jq;
+async fn main() -> i64 {
+  json: string = "[1, 2, 3]";
+  result: string = await jq.query(".[0]", json);
+  println(result);
+  return 0;
+}

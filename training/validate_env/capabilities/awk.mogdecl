@@ -1,0 +1,28 @@
+// awk — Text processing capability (POSIX host)
+// Provides field extraction, pattern-based processing, and aggregation.
+
+capability awk {
+  // Extract a specific field (1-indexed) using delimiter
+  fn field(column: int, delimiter: string, text: string) -> string
+
+  // Extract multiple fields by indices (comma-separated), return tab-separated
+  fn fields(columns: string, delimiter: string, text: string) -> string
+
+  // Return lines matching pattern
+  fn filter(pattern: string, text: string) -> string
+
+  // Sum numeric values in a field (1-indexed) using delimiter
+  fn sum_field(column: int, delimiter: string, text: string) -> float
+
+  // Count lines matching pattern
+  fn count_matching(pattern: string, text: string) -> int
+
+  // Return unique values from a field (1-indexed) using delimiter
+  fn unique_field(column: int, delimiter: string, text: string) -> string
+
+  // Apply format string to each line, extracting fields by delimiter
+  fn format_fields(format_str: string, delimiter: string, text: string) -> string
+
+  // Return the number of fields in the first line using delimiter
+  fn field_count(delimiter: string, text: string) -> int
+}

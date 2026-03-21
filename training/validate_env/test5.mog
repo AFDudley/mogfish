@@ -1,0 +1,6 @@
+requires docker;
+async fn main() -> i64 {
+  result: string = await docker.exec("mycontainer", "ls -la");
+  println(result);
+  return 0;
+}

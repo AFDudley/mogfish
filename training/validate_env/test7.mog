@@ -1,0 +1,7 @@
+requires fs;
+async fn main() -> i64 {
+  content: string = await fs.read_file("/tmp/source.txt");
+  code: int = await fs.write_file("dest.txt", content);
+  println("Copied file");
+  return 0;
+}

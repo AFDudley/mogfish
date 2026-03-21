@@ -1,0 +1,11 @@
+requires grep;
+requires find;
+async fn main() -> i64 {
+  files: string = await find.by_name("*.py", "/home/rix/src");
+  println("Python files found:");
+  println(files);
+  matches: string = await grep.search_recursive("import os", "/home/rix/src");
+  println("Files importing os:");
+  println(matches);
+  return 0;
+}

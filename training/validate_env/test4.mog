@@ -1,0 +1,8 @@
+requires python3;
+requires awk;
+async fn main() -> i64 {
+  packages: string = await python3.pip_list();
+  filtered: string = await awk.filter("exophial", packages);
+  println(filtered);
+  return 0;
+}

@@ -1,0 +1,16 @@
+// docker — Container management capability
+// Typed interface to Docker container and image operations.
+
+capability docker {
+  // Containers
+  fn ps(args: string) -> string
+  fn run(image: string, args: string) -> string
+  fn exec(container: string, cmd: string) -> string
+  fn logs(container: string) -> string
+  fn stop(container: string) -> int
+  fn rm(container: string) -> int
+
+  // Images
+  fn images(args: string) -> string
+  async fn build(context: string, tag: string) -> string
+}
