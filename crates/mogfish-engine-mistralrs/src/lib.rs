@@ -152,7 +152,30 @@ impl MistralRsEngine {
             n_cur += 1;
         }
 
-        Ok(output)
+        // Clean SentencePiece artifacts from MLX-trained models:
+        // - U+2581 (▁) space markers
+        // - [UNK_BYTE_0xe29681...] strings that llama.cpp emits for unknown tokens
+        let output = output.replace('\u{2581}', " ");
+        // Strip [UNK_BYTE_0xe29681 X] patterns — keep the X (the actual content after the space)
+        let mut cleaned = String::with_capacity(output.len());
+        let mut chars = output.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '[' {
+                // Check for [UNK_BYTE_0xe29681 ...]
+                let rest: String = chars.clone().take(20).collect();
+                if rest.starts_with("UNK_BYTE_0xe29681") {
+                    // Skip past the closing ]
+                    while let Some(ch) = chars.next() {
+                        if ch == ']' {
+                            break;
+                        }
+                    }
+                    continue;
+                }
+            }
+            cleaned.push(c);
+        }
+        Ok(cleaned)
     }
 
     /// Extract JSON from a response that may contain markdown code fences
