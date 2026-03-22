@@ -17,7 +17,10 @@ fn get_engine() -> &'static MistralRsEngine {
     ENGINE.get_or_init(|| {
         let model_id =
             std::env::var("MOGFISH_TEST_MODEL").expect("MOGFISH_TEST_MODEL must be set");
-        MistralRsEngine::from_hf_model(&model_id).expect("failed to load model")
+        let use_gpu = std::env::var("MOGFISH_USE_GPU")
+            .map(|v| v == "1" || v == "true")
+            .unwrap_or(false);
+        MistralRsEngine::from_hf_model(&model_id, use_gpu).expect("failed to load model")
     })
 }
 

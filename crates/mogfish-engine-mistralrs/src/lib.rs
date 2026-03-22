@@ -12,7 +12,8 @@ use std::path::Path;
 use anyhow::Context;
 use mistralrs::blocking::BlockingModel;
 use mistralrs::{
-    Constraint, IsqType, ModelBuilder, RequestBuilder, TextMessageRole, TextMessages,
+    Constraint, Device, IsqType, ModelBuilder, RequestBuilder,
+    TextMessageRole, TextMessages,
 };
 use mogfish_traits::{
     Annotation, Classification, ClassificationCategory, GroundingContext, InferenceEngine,
@@ -40,10 +41,15 @@ impl MistralRsEngine {
     /// `model_id` can be:
     /// - A HuggingFace model ID like `"unsloth/gemma-3-1b-it"` (downloaded automatically)
     /// - A local path to a directory containing safetensors + config.json + tokenizer.json
-    pub fn from_hf_model(model_id: &str) -> anyhow::Result<Self> {
-        let builder = ModelBuilder::new(model_id)
+    /// `use_gpu`: true to load on GPU (model must fit in VRAM), false for CPU.
+    pub fn from_hf_model(model_id: &str, use_gpu: bool) -> anyhow::Result<Self> {
+        let mut builder = ModelBuilder::new(model_id)
             .with_isq(IsqType::Q4K)
             .with_logging();
+
+        if !use_gpu {
+            builder = builder.with_device(Device::Cpu);
+        }
 
         let model = BlockingModel::from_auto_builder(builder)
             .map_err(|e| anyhow::anyhow!("model load failed: {e}"))?;
@@ -52,11 +58,11 @@ impl MistralRsEngine {
     }
 
     /// Load from a local directory path, verifying it exists first.
-    pub fn from_local_model(model_path: &Path) -> anyhow::Result<Self> {
+    pub fn from_local_model(model_path: &Path, use_gpu: bool) -> anyhow::Result<Self> {
         if !model_path.exists() {
             anyhow::bail!("model directory not found: {}", model_path.display());
         }
-        Self::from_hf_model(&model_path.to_string_lossy())
+        Self::from_hf_model(&model_path.to_string_lossy(), use_gpu)
     }
 
     /// Build the annotation JSON schema as a serde_json::Value.

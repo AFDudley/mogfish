@@ -128,7 +128,10 @@ fn make_engine(name: &str) -> anyhow::Result<Box<dyn mogfish_traits::InferenceEn
                 .or_else(|_| std::env::var("MOGFISH_MODEL_PATH"))
                 .map_err(|_| anyhow::anyhow!("MOGFISH_MODEL_ID or MOGFISH_MODEL_PATH must be set for mistralrs engine"))?;
 
-            let engine = mogfish_engine_mistralrs::MistralRsEngine::from_hf_model(&model_id)?;
+            let use_gpu = std::env::var("MOGFISH_USE_GPU")
+                .map(|v| v == "1" || v == "true")
+                .unwrap_or(false);
+            let engine = mogfish_engine_mistralrs::MistralRsEngine::from_hf_model(&model_id, use_gpu)?;
             Ok(Box::new(engine))
         }
         other => anyhow::bail!("unknown engine: {other}"),
