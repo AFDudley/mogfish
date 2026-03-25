@@ -1,0 +1,17 @@
+status: completed
+files_changed:
+  - .cargo/config.toml
+  - crates/annotator-cli/tests/integration_batch.rs
+files_deleted: []
+tests_added:
+  - crates/annotator-cli/tests/integration_batch.rs
+docs_updated: []
+summary: >-
+  Added batch annotation integration test (integration_batch.rs) that validates
+  output quality with a real model. The test copies 5 fish completion files to a
+  tempdir, runs mogfish-annotate batch with the mistralrs engine, and validates
+  each output for non-empty mog-description, at least one mog-intent line,
+  non-degenerate content (repetitive token detection), and original content
+  preservation after the end marker. Test is #[ignore] and gated behind
+  MOGFISH_TEST_MODEL env var. Also added .cargo/config.toml with
+  RUST_TEST_THREADS=1 to serialize integration tests. All existing tests pass.
