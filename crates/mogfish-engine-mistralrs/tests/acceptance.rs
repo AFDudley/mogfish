@@ -4,6 +4,7 @@
 // InferenceEngine trait. Tests that require a real model are gated
 // behind MOGFISH_TEST_MODEL env var and marked #[ignore].
 
+use std::path::Path;
 use std::sync::OnceLock;
 
 use mogfish_engine_mistralrs::MistralRsEngine;
@@ -20,7 +21,23 @@ fn get_engine() -> &'static MistralRsEngine {
         let use_gpu = std::env::var("MOGFISH_USE_GPU")
             .map(|v| v == "1" || v == "true")
             .unwrap_or(false);
-        MistralRsEngine::from_hf_model(&model_id, use_gpu).expect("failed to load model")
+
+        if model_id.ends_with(".uqff") {
+            // UQFF needs the HF model dir for tokenizer/config/residual.
+            // These are in the same directory as the .uqff shard files.
+            let uqff_path = Path::new(&model_id);
+            let hf_dir = uqff_path
+                .parent()
+                .expect("UQFF path must have a parent directory");
+            MistralRsEngine::from_uqff(
+                &hf_dir.to_string_lossy(),
+                uqff_path,
+                use_gpu,
+            )
+            .expect("failed to load UQFF model")
+        } else {
+            MistralRsEngine::from_hf_model(&model_id, use_gpu).expect("failed to load model")
+        }
     })
 }
 

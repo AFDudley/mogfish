@@ -3,14 +3,17 @@
 // See docs/plans/mogfish-outside-in-tdd.md, Layer 0, 2
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "mogfish-annotate", about = "Annotate fish completions with mog metadata")]
+#[command(
+    name = "mogfish-annotate",
+    about = "Annotate fish completions with mog metadata"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -90,7 +93,10 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn run_daemon(dir: &std::path::Path, engine: &dyn mogfish_traits::InferenceEngine) -> anyhow::Result<()> {
+fn run_daemon(
+    dir: &std::path::Path,
+    engine: &dyn mogfish_traits::InferenceEngine,
+) -> anyhow::Result<()> {
     eprintln!("mogfish-annotate daemon watching: {}", dir.display());
 
     // Initial scan
@@ -126,12 +132,17 @@ fn make_engine(name: &str) -> anyhow::Result<Box<dyn mogfish_traits::InferenceEn
         "mistralrs" => {
             let model_id = std::env::var("MOGFISH_MODEL_ID")
                 .or_else(|_| std::env::var("MOGFISH_MODEL_PATH"))
-                .map_err(|_| anyhow::anyhow!("MOGFISH_MODEL_ID or MOGFISH_MODEL_PATH must be set for mistralrs engine"))?;
+                .map_err(|_| {
+                    anyhow::anyhow!(
+                        "MOGFISH_MODEL_ID or MOGFISH_MODEL_PATH must be set for mistralrs engine"
+                    )
+                })?;
 
             let use_gpu = std::env::var("MOGFISH_USE_GPU")
                 .map(|v| v == "1" || v == "true")
                 .unwrap_or(false);
-            let engine = mogfish_engine_mistralrs::MistralRsEngine::from_hf_model(&model_id, use_gpu)?;
+            let engine =
+                mogfish_engine_mistralrs::MistralRsEngine::from_hf_model(&model_id, use_gpu)?;
             Ok(Box::new(engine))
         }
         other => anyhow::bail!("unknown engine: {other}"),

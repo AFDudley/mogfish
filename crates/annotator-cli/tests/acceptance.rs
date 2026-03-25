@@ -43,7 +43,10 @@ fn setup_completions_dir() -> TempDir {
                 .unwrap_or(false)
         })
         .count();
-    assert!(count >= 1, "need at least 1 .fish file for test, got {count}");
+    assert!(
+        count >= 1,
+        "need at least 1 .fish file for test, got {count}"
+    );
 
     tmp
 }
@@ -77,7 +80,13 @@ fn batch_annotate_with_mock_engine() {
     // Run the CLI
     let bin = env!("CARGO_BIN_EXE_mogfish-annotate");
     let output = Command::new(bin)
-        .args(["batch", "--dir", tmp.path().to_str().unwrap(), "--engine", "mock"])
+        .args([
+            "batch",
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "--engine",
+            "mock",
+        ])
         .output()
         .expect("failed to execute mogfish-annotate");
 
@@ -158,10 +167,7 @@ fn batch_dry_run_does_not_modify() {
     // Files should be unchanged
     for (name, original) in &before {
         let after = fs::read_to_string(tmp.path().join(name)).unwrap();
-        assert_eq!(
-            &after, original,
-            "{name} was modified during dry-run",
-        );
+        assert_eq!(&after, original, "{name} was modified during dry-run",);
     }
 }
 
@@ -174,7 +180,13 @@ fn batch_annotate_is_idempotent() {
 
     // First run
     let out1 = Command::new(bin)
-        .args(["batch", "--dir", tmp.path().to_str().unwrap(), "--engine", "mock"])
+        .args([
+            "batch",
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "--engine",
+            "mock",
+        ])
         .output()
         .expect("first run");
     assert!(out1.status.success(), "first run failed");
@@ -193,7 +205,13 @@ fn batch_annotate_is_idempotent() {
 
     // Second run
     let out2 = Command::new(bin)
-        .args(["batch", "--dir", tmp.path().to_str().unwrap(), "--engine", "mock"])
+        .args([
+            "batch",
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "--engine",
+            "mock",
+        ])
         .output()
         .expect("second run");
     assert!(out2.status.success(), "second run failed");

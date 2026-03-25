@@ -7,8 +7,8 @@
 
 use std::fs;
 use std::process::{Child, Command};
-use std::time::Duration;
 use std::thread;
+use std::time::Duration;
 
 use tempfile::TempDir;
 
@@ -71,13 +71,7 @@ fn daemon_clean_shutdown() {
 
 fn start_daemon(dir: &std::path::Path) -> Child {
     Command::new(bin())
-        .args([
-            "daemon",
-            "--dir",
-            dir.to_str().unwrap(),
-            "--engine",
-            "mock",
-        ])
+        .args(["daemon", "--dir", dir.to_str().unwrap(), "--engine", "mock"])
         .spawn()
         .expect("failed to start daemon")
 }

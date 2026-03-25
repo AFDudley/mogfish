@@ -21,14 +21,27 @@ fn empty_fish_file_gets_annotated() {
     fs::write(tmp.path().join("empty.fish"), "").unwrap();
 
     let output = Command::new(bin())
-        .args(["batch", "--dir", tmp.path().to_str().unwrap(), "--engine", "mock"])
+        .args([
+            "batch",
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "--engine",
+            "mock",
+        ])
         .output()
         .unwrap();
 
-    assert!(output.status.success(), "failed on empty file: {}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "failed on empty file: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     let content = fs::read_to_string(tmp.path().join("empty.fish")).unwrap();
-    assert!(content.contains("# mog-description:"), "empty file should still get annotations");
+    assert!(
+        content.contains("# mog-description:"),
+        "empty file should still get annotations"
+    );
 }
 
 /// Non-.fish files in the directory should be ignored.
@@ -40,15 +53,27 @@ fn non_fish_files_ignored() {
     fs::write(tmp.path().join("real.fish"), "complete -c test\n").unwrap();
 
     let output = Command::new(bin())
-        .args(["batch", "--dir", tmp.path().to_str().unwrap(), "--engine", "mock"])
+        .args([
+            "batch",
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "--engine",
+            "mock",
+        ])
         .output()
         .unwrap();
 
     assert!(output.status.success());
 
     // Non-fish files should be untouched
-    assert_eq!(fs::read_to_string(tmp.path().join("readme.md")).unwrap(), "# hello");
-    assert_eq!(fs::read_to_string(tmp.path().join("script.py")).unwrap(), "print('hi')");
+    assert_eq!(
+        fs::read_to_string(tmp.path().join("readme.md")).unwrap(),
+        "# hello"
+    );
+    assert_eq!(
+        fs::read_to_string(tmp.path().join("script.py")).unwrap(),
+        "print('hi')"
+    );
 
     // Fish file should be annotated
     let fish = fs::read_to_string(tmp.path().join("real.fish")).unwrap();
@@ -61,7 +86,13 @@ fn empty_directory_succeeds() {
     let tmp = TempDir::new().unwrap();
 
     let output = Command::new(bin())
-        .args(["batch", "--dir", tmp.path().to_str().unwrap(), "--engine", "mock"])
+        .args([
+            "batch",
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "--engine",
+            "mock",
+        ])
         .output()
         .unwrap();
 
@@ -81,12 +112,22 @@ fn binary_file_skipped_gracefully() {
     fs::write(tmp.path().join("good.fish"), "complete -c test\n").unwrap();
 
     let output = Command::new(bin())
-        .args(["batch", "--dir", tmp.path().to_str().unwrap(), "--engine", "mock"])
+        .args([
+            "batch",
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "--engine",
+            "mock",
+        ])
         .output()
         .unwrap();
 
     // Should not crash — the good file should still be annotated
-    assert!(output.status.success(), "crashed on binary file: {}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "crashed on binary file: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     let good = fs::read_to_string(tmp.path().join("good.fish")).unwrap();
     assert!(good.contains("# mog-description:"));
@@ -100,13 +141,25 @@ fn existing_comments_preserved() {
     fs::write(tmp.path().join("myapp.fish"), original).unwrap();
 
     let output = Command::new(bin())
-        .args(["batch", "--dir", tmp.path().to_str().unwrap(), "--engine", "mock"])
+        .args([
+            "batch",
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "--engine",
+            "mock",
+        ])
         .output()
         .unwrap();
 
     assert!(output.status.success());
 
     let annotated = fs::read_to_string(tmp.path().join("myapp.fish")).unwrap();
-    assert!(annotated.contains("# mog-description:"), "missing annotation");
-    assert!(annotated.contains(original), "original content not preserved");
+    assert!(
+        annotated.contains("# mog-description:"),
+        "missing annotation"
+    );
+    assert!(
+        annotated.contains(original),
+        "original content not preserved"
+    );
 }

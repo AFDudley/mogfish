@@ -7,13 +7,13 @@
 //
 // See docs/plans/mogfish-outside-in-tdd.md
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use mistralrs::blocking::BlockingModel;
 use mistralrs::{
-    Constraint, Device, IsqType, ModelBuilder, RequestBuilder,
-    TextMessageRole, TextMessages,
+    Constraint, Device, IsqType, MemoryGpuConfig, ModelBuilder, PagedAttentionMetaBuilder,
+    RequestBuilder, TextMessageRole, TextMessages, UqffVisionModelBuilder,
 };
 use mogfish_traits::{
     Annotation, Classification, ClassificationCategory, GroundingContext, InferenceEngine,
@@ -41,13 +41,24 @@ impl MistralRsEngine {
     /// `model_id` can be:
     /// - A HuggingFace model ID like `"unsloth/gemma-3-1b-it"` (downloaded automatically)
     /// - A local path to a directory containing safetensors + config.json + tokenizer.json
+    ///
     /// `use_gpu`: true to load on GPU (model must fit in VRAM), false for CPU.
     pub fn from_hf_model(model_id: &str, use_gpu: bool) -> anyhow::Result<Self> {
         let mut builder = ModelBuilder::new(model_id)
             .with_isq(IsqType::Q4K)
             .with_logging();
 
-        if !use_gpu {
+        if use_gpu {
+            // Limit KV cache to 4096 tokens via PagedAttention. Without this,
+            // models with large max_position_embeddings (e.g. Gemma 3's 131072)
+            // cause PA to pre-allocate a KV cache that exhausts VRAM on cards
+            // with 12GB. Our actual usage is ~2000 input + 1024 output tokens.
+            builder = builder.with_paged_attn(
+                PagedAttentionMetaBuilder::default()
+                    .with_gpu_memory(MemoryGpuConfig::ContextSize(4096))
+                    .build()?,
+            );
+        } else {
             builder = builder.with_device(Device::Cpu);
         }
 
@@ -63,6 +74,53 @@ impl MistralRsEngine {
             anyhow::bail!("model directory not found: {}", model_path.display());
         }
         Self::from_hf_model(&model_path.to_string_lossy(), use_gpu)
+    }
+
+    /// Load from a pre-quantized UQFF file. Skips the fp16 intermediate —
+    /// tensors go directly to the target device at the quantized size.
+    ///
+    /// `model_id` is the HF model directory (for tokenizer, config, etc.).
+    /// `uqff_path` is the path to the first `.uqff` shard file (remaining
+    /// shards are auto-discovered).
+    ///
+    /// Uses the vision pipeline because Gemma3 is detected as a vision
+    /// architecture by mistral.rs, even for text-only inference.
+    pub fn from_uqff(model_id: &str, uqff_path: &Path, use_gpu: bool) -> anyhow::Result<Self> {
+        if !uqff_path.exists() {
+            anyhow::bail!("UQFF file not found: {}", uqff_path.display());
+        }
+
+        let uqff_builder =
+            UqffVisionModelBuilder::new(model_id, vec![PathBuf::from(uqff_path)]);
+        let mut builder = uqff_builder.into_inner();
+
+        if use_gpu {
+            // Same KV cache limit as from_hf_model — see comment there.
+            builder = builder.with_paged_attn(
+                PagedAttentionMetaBuilder::default()
+                    .with_gpu_memory(MemoryGpuConfig::ContextSize(4096))
+                    .build()?,
+            );
+        } else {
+            builder = builder.with_device(Device::Cpu);
+        }
+
+        builder = builder.with_logging();
+
+        // BlockingModel only has from_builder(TextModelBuilder) and
+        // from_auto_builder(ModelBuilder). VisionModelBuilder requires
+        // manual runtime creation + async build.
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .context("failed to create tokio runtime")?;
+
+        let model_inner = rt
+            .block_on(builder.build())
+            .map_err(|e| anyhow::anyhow!("UQFF model load failed: {e}"))?;
+
+        let model = BlockingModel::new(model_inner, std::sync::Arc::new(rt));
+        Ok(Self { model })
     }
 
     /// Build the annotation JSON schema as a serde_json::Value.
