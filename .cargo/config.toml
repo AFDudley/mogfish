@@ -1,0 +1,4 @@
+# Model inference can only handle one request at a time.
+# Serialize integration tests to avoid contention.
+[env]
+RUST_TEST_THREADS = { value = "1", force = false }
