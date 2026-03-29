@@ -96,7 +96,7 @@ Reconstructed from 32 development sessions (2026-03-20 to 2026-03-29):
 | Pass 3 | Classification fine-tune | marks, LoRA on Pass 2 fused | Adapter saved (`pass3-classifier`) |
 | Combined | All 3 tasks, shuffled | marks, LoRA from base | Adapter saved (`combined-v1`) |
 | Combined ordered | All 3 tasks, annotation last (recency bias) | marks, LoRA from base | Adapter saved (`combined-ordered-v1`) |
-| 12B attempt | Gemma 3 12B, all tasks | marks, mlx-lm LoRA | Completed (525-message session) |
+| 12B attempt | Gemma 3 12B, all tasks | marks, mlx-lm LoRA | Trained (1,401 iters, 14 checkpoints), fused, exported to UQFF. Inference failed on kelce — 4 consecutive test failures (GPU, CPU, release mode, original HF). Never produced correct output. |
 
 Bash-to-Mog translation was done via 10 parallel worker sessions
 (cap_batch_001–010), each translating ~100–500 commands using per-tool
@@ -116,7 +116,7 @@ Bash-to-Mog translation was done via 10 parallel worker sessions
 | Train Pass 2 (Mog generation) | Done |
 | Train Pass 3 (classification) | Done |
 | Train combined model (all 3 tasks) | Done (two variants: shuffled + ordered) |
-| Train 12B model | Done (experimental) |
+| Train 12B model | Training completed, inference failed — all 4 test attempts on kelce returned exit code 101. Never validated. |
 | LoRA adapter swapping (single base + per-task adapters) | Attempted, abandoned for combined model |
 | Engine migration to mistral.rs (safetensors, ISQ) | Done |
 | Deploy model + collect live feedback | Not started |

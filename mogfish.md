@@ -18,7 +18,7 @@ Fish's completion machinery is central to how mogfish feels native. Every skill 
 
 ### The Annotator
 
-The annotator is a Rust daemon that runs in the background and maintains a semantically enriched view of everything installed on the system. On first run it walks fish's existing generated completions directory — fish already parses man pages and writes completion stubs for installed software — and augments each entry using a locally running 1.5B model. The augmentation adds natural language descriptions: what the command does, what kinds of intent a user might express to invoke it, what its parameters mean in plain terms. These annotations are written back as structured comments in the `.fish` completion files themselves. No database, no separate index — the filesystem is the store, consistent with how fish already works.
+The annotator is a Rust daemon that runs in the background and maintains a semantically enriched view of everything installed on the system. On first run it walks fish's existing generated completions directory — fish already parses man pages and writes completion stubs for installed software — and augments each entry using a locally running model. The augmentation adds natural language descriptions: what the command does, what kinds of intent a user might express to invoke it, what its parameters mean in plain terms. These annotations are written back as structured comments in the `.fish` completion files themselves. No database, no separate index — the filesystem is the store, consistent with how fish already works.
 
 The annotator hooks into the package manager. When software is installed, new completions are annotated automatically in the background. When software is removed, its completion entries are cleaned up, and any cached Mog scripts that declared a dependency on it are flagged for invalidation. This dependency tracking comes for free from Mog's capability declaration system — every generated script begins with a header declaring what it requires, so the annotator always knows exactly what depends on what.
 
@@ -39,6 +39,22 @@ Fish is the thing you interact with. The annotator is the thing that knows your 
 When you type a command fish already knows, nothing changes. When you type something that matches a cached skill — even loosely, because fish's completion suggestions surface it — the Mog runtime runs the cached script. When you type something genuinely new, the input classifier routes it to the annotator's model, which generates a Mog script grounded in the annotator's knowledge of what's actually installed, caches it, registers it with fish, and runs it. The next time you need the same thing, it's a cached skill. The time after that, fish is already suggesting it before you finish typing.
 
 The skill cache is shared. It is not per-session or per-tool. A skill generated interactively at the command line is immediately available to Claude Code via the MCP interface, and a skill exercised by Claude Code is available at the command line. Every use pattern, regardless of which tool produced it, contributes to a single growing library of verified, working, sandboxed capabilities grounded in your actual environment.
+
+---
+
+## Deployment Constraints
+
+Mogfish must run anywhere a shell runs. The inference model targets three deployment classes:
+
+1. **Lightweight VMs** — CPU-only, less than 1GB total RAM budget for the model. This is the hardest target and the one that sets the ceiling on model size. If it fits here, it fits everywhere.
+2. **Phones** — ARM processors with on-device AI accelerators (Apple ANE, Qualcomm Hexagon NPU, Samsung NPU). Typically 2–6GB total device RAM. The model must be small enough to share memory with the rest of the system and structured to take advantage of neural engine hardware when available.
+3. **PCs** — x86 or ARM with optional GPU (CUDA, Metal, ROCm). The easiest case. If the model runs on a phone it runs here trivially.
+
+The RAM budget is the hard constraint, not the parameter count. The current model — Gemma 3 1B at Q4K quantization — is approximately 700MB on disk, which fits the VM case. If a 1B model can't solve the task (annotation, classification, Mog generation) at sufficient quality, the answer is a larger model with more aggressive quantization, not giving up on the task. The deployment envelope determines what quantization and parameter count combinations are viable. If the quality bar requires a model that can't fit under 1GB at any quantization, the VM RAM ceiling moves — but that's a last resort.
+
+The engine must support multiple inference backends to cover these targets. The current implementation uses a forked mistral.rs with CUDA support, which covers the PC case. Phone and VM deployment will require additional backends (Core ML, ONNX Runtime, or similar) but the model itself — the weights, the fine-tuning, the task structure — is the same across all targets. The `InferenceEngine` trait abstraction exists specifically to make backends swappable without touching the rest of the system.
+
+The skill cache is central to making this work. A 1B model running on a phone NPU is not fast. But it only needs to generate each skill once. After that, execution is a cached Mog script — no inference, no latency, no power draw. The system gets faster with use, and the amortized cost of inference approaches zero.
 
 ---
 
