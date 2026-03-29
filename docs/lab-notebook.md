@@ -112,14 +112,103 @@ them into a standalone HF safetensors model. This is a gap — the next
 step is fusing the `combined-v1` adapter into the base model to produce
 a deployable artifact.
 
+### 6. Fuse 1B LoRA adapter and test (2026-03-29)
+
+**Hypothesis:** Fusing the `combined-v1` LoRA adapter into the base model
+produces a model that fixes the flag extraction failure and generates real
+classifications.
+
+**Fusion:** Wrote `training/fuse_lora.py`. MLX LoRA orientation is
+`(a @ b).T` where a=[out, rank], b=[rank, in]. 182/182 pairs fused,
+scale=2.0, output in bfloat16. Result at
+`/home/rix/mogfish-model/gemma3-1b-mogfish-combined-v1/`.
+
+**Result: 3 PASS, 1 FAIL — 239 seconds total. Different failure than base.**
+
+| Test | Base model | Fused model |
+|------|-----------|-------------|
+| `generate_mog` | pass | pass |
+| `classify` | pass (echoed example: `"command": "name"`) | **pass (real: `"command": "git"`, confidence 1.0)** |
+| `annotate_flag_docs` (rsync) | **FAIL** (newlines, no flags) | **PASS (extracted -v, -a, -n correctly)** |
+| `annotate` (git) | pass | **FAIL (repetition loop: "git push to remote repository" × ~100)** |
+
+**Details on the flag extraction success:**
+```json
+{"description": "Synchronize files and directories between two or more locations",
+ "intents": ["sync files", "copy files between computers", "backup data",
+             "synchronize directories", "move files to different locations"],
+ "flags": [{"flag": "-v/--verbose", "description": "increase verbosity"},
+           {"flag": "-a/--archive", "description": "archive mode"},
+           {"flag": "-n/--dry-run", "description": "perform a trial run with no changes made"}]}
+```
+Quality is good — description is accurate, intents are relevant, all 3 flags
+extracted with correct descriptions.
+
+**Details on the git annotation failure:**
+- Description correct: "Manage Git repositories and track changes"
+- Intents array entered repetition loop: "git push to remote repository"
+  repeated ~100 times until hitting 1024 token `max_len`.
+- JSON truncated mid-string, never closed.
+- The JSON schema constraint ensures valid tokens but doesn't limit array
+  length — the grammar allows infinite array elements.
+
+**Conclusion:** Fine-tuning works. The fused model produces real
+classifications and extracts flags correctly. The repetition loop is a
+constrained generation issue, not a model quality issue — the schema
+needs `maxItems` on the intents array, or `max_len` needs to be lower,
+or a repetition penalty is needed.
+
+### 7. Fix repetition: maxItems + DRY + max_len (2026-03-29)
+
+**Hypothesis:** Adding `maxItems` to the JSON schema, DRY repetition
+penalty, and reducing `max_len` from 1024 to 512 will prevent the
+intents array repetition loop.
+
+**Changes:**
+- `annotation_schema()`: added `"maxItems": 10` on intents, `"maxItems": 30` on flags
+- `chat_constrained()`: added `DrySamplingParams::new_with_defaults(0.8, ...)`
+- `chat_constrained()`: reduced `set_sampler_max_len` from 1024 to 512
+
+**Result: 3 PASS, 1 FAIL — 126 seconds (down from 241s).**
+
+The `maxItems` constraint works — intents array caps at 10 items with
+unique entries (DRY prevents duplicates). But the git annotation still
+pads with whitespace after 10 intents instead of transitioning to the
+`flags` field. The model doesn't know to close the array and move on
+for this specific short input.
+
+The rsync annotation continues to pass perfectly every run — correct
+description, 5 intents, 3 flags with accurate descriptions.
+
+| Test | maxItems only | maxItems + DRY | + max_len 512 |
+|------|-------------|----------------|---------------|
+| rsync annotate | pass | pass | pass |
+| git annotate | fail (whitespace) | fail (whitespace, unique intents) | fail (less whitespace, 126s vs 241s) |
+| classify | pass | pass | pass |
+| generate_mog | pass | pass | pass |
+
+**Conclusion:** The engine tuning (`maxItems` + DRY + shorter `max_len`)
+is correct and standard practice per prior art (Outlines #690, llguidance).
+The remaining git annotation failure is model quality — the model wasn't
+trained on short help text inputs and doesn't learn to transition between
+JSON fields. This needs better training data, not more engine parameters.
+
 ## Open Questions
 
-1. **Constrained generation speed.** 75 seconds per constrained call on
-   CPU is too slow for interactive classification. Options: free-form +
-   post-hoc parsing, smaller schema, or accept it for batch-only use.
+1. **Constrained generation speed.** ~30s per constrained call at
+   max_len 512 (down from ~75s at 1024). Still slow for interactive use.
+   Free-form is ~3 seconds. Batch annotation is fine.
 
-2. **Fused model quality.** Will the fine-tuned model fix the flag
-   extraction failure? Unknown until we fuse and test.
+2. **Memory footprint.** Not yet measured in release mode. Need to
+   verify the <1GB target.
 
-3. **Memory footprint.** The debug build used 2.1GB RSS. The release
-   build RSS was not measured. Need to verify the <1GB target is met.
+3. **Combined-ordered-v1 vs combined-v1.** We fused `combined-v1` (the
+   shuffled variant). The `combined-ordered-v1` adapter (annotation
+   examples last, exploiting recency bias) might produce better
+   annotation quality. It doesn't exist on kelce — check if it was ever
+   produced.
+
+4. **Git annotation quality.** The model fails on short help text
+   ("git - the stupid content tracker"). Needs either richer input
+   (pass the full git help text) or training data that covers short
+   inputs.

@@ -12,8 +12,9 @@ use std::path::{Path, PathBuf};
 use anyhow::Context;
 use mistralrs::blocking::BlockingModel;
 use mistralrs::{
-    Constraint, Device, IsqType, MemoryGpuConfig, ModelBuilder, PagedAttentionMetaBuilder,
-    RequestBuilder, TextMessageRole, TextMessages, UqffVisionModelBuilder,
+    Constraint, Device, DrySamplingParams, IsqType, MemoryGpuConfig, ModelBuilder,
+    PagedAttentionMetaBuilder, RequestBuilder, TextMessageRole, TextMessages,
+    UqffVisionModelBuilder,
 };
 use mogfish_traits::{
     Annotation, Classification, ClassificationCategory, GroundingContext, InferenceEngine,
@@ -131,7 +132,8 @@ impl MistralRsEngine {
                 "description": { "type": "string" },
                 "intents": {
                     "type": "array",
-                    "items": { "type": "string" }
+                    "items": { "type": "string" },
+                    "maxItems": 10
                 },
                 "flags": {
                     "type": "array",
@@ -142,7 +144,8 @@ impl MistralRsEngine {
                             "description": { "type": "string" }
                         },
                         "required": ["flag", "description"]
-                    }
+                    },
+                    "maxItems": 30
                 }
             },
             "required": ["description", "intents", "flags"]
@@ -177,10 +180,14 @@ impl MistralRsEngine {
             .add_message(TextMessageRole::User, user_message)
             .into();
 
+        let dry = DrySamplingParams::new_with_defaults(0.8, None, None, None)
+            .map_err(|e| anyhow::anyhow!("DRY params: {e}"))?;
+
         let request = messages
             .set_constraint(Constraint::JsonSchema(schema))
             .set_sampler_temperature(0.1)
-            .set_sampler_max_len(1024);
+            .set_sampler_max_len(512)
+            .set_sampler_dry_params(dry);
 
         let response = self
             .model
