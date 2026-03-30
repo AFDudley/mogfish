@@ -1,0 +1,28 @@
+
+complete -f -c eas -n __fish_use_subcommand -a  account -d   'manage account'
+complete -f -c eas -n __fish_use_subcommand -a  branch -d    'manage update branches'
+complete -f -c eas -n __fish_use_subcommand -a  build -d     'build app binaries'
+complete -f -c eas -n __fish_use_subcommand -a  channel -d   'manage update channels'
+complete -f -c eas -n __fish_use_subcommand -a  device -d    'manage Apple devices for Internal Distribution'
+complete -f -c eas -n __fish_use_subcommand -a  metadata -d  'manage store configuration'
+complete -f -c eas -n __fish_use_subcommand -a  project -d   'manage project'
+complete -f -c eas -n __fish_use_subcommand -a  secret -d    'manage project and account secrets'
+complete -f -c eas -n __fish_use_subcommand -a  update -d    'manage individual updates'
+complete -f -c eas -n __fish_use_subcommand -a  webhook -d   'manage webhooks'
+
+complete -f -c eas -n __fish_use_subcommand -a analytics -d 'display or change analytics settings'
+complete -f -c eas -n __fish_use_subcommand -a autocomplete -d 'display autocomplete installation instructions'
+complete -f -c eas -n __fish_use_subcommand -a build -d 'start a build'
+complete -f -c eas -n __fish_use_subcommand -a config -d 'display project configuration (app.json + eas.json)'
+complete -f -c eas -n __fish_use_subcommand -a credentials -d 'manage credentials'
+complete -f -c eas -n __fish_use_subcommand -a diagnostics -d 'display environment info'
+complete -f -c eas -n __fish_use_subcommand -a help -d 'Display help for eas.'
+complete -f -c eas -n __fish_use_subcommand -a init -d 'create or link an EAS project'
+complete -f -c eas -n __fish_use_subcommand -a login -d 'log in with your Expo account'
+complete -f -c eas -n __fish_use_subcommand -a logout -d 'log out'
+complete -f -c eas -n __fish_use_subcommand -a open -d 'open the project page in a web browser'
+complete -f -c eas -n __fish_use_subcommand -a submit -d 'submit app binary to App Store and/or Play Store'
+complete -f -c eas -n __fish_use_subcommand -a update -d 'publish an update group'
+complete -f -c eas -n __fish_use_subcommand -a whoami -d 'show the username you are logged in as'
+
+

@@ -1,0 +1,10 @@
+complete -c iotop -s C -d "# don't clear the screen"
+complete -c iotop -s D -d '# print delta times, elapsed, us'
+complete -c iotop -s j -d '# print project ID'
+complete -c iotop -s o -d '# print disk delta times, us'
+complete -c iotop -s P -d '# print %I/O (disk delta times)'
+complete -c iotop -s Z -d '# print zone ID'
+complete -c iotop -s d -d 'device       # instance name to snoop'
+complete -c iotop -s f -d 'filename     # snoop this file only'
+complete -c iotop -s m -d 'mount_point  # this FS only'
+complete -c iotop -s t -d 'top   # print top number only'

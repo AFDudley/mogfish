@@ -1,0 +1,11 @@
+complete -c duckcli -n __fish_no_arguments -s V -l version -d "Output duckcli's version."
+complete -c duckcli -s D -l database -d 'TEXT     Database to use.'
+complete -c duckcli -s R -l prompt -d 'TEXT       Prompt format (Default: "\\d> ").'
+complete -c duckcli -s l -l logfile -d 'FILENAME  Log every query and its results to a file.'
+complete -c duckcli -l duckclirc -d 'FILE        Location of duckclirc file.'
+complete -c duckcli -l auto-vertical-output -d 'Automatically switch to vertical output mode if the'
+complete -c duckcli -s t -l table -d 'Display batch output in table format.'
+complete -c duckcli -l csv -d 'Display batch output in CSV format.'
+complete -c duckcli -l warn -d '/ --no-warn      Warn before running a destructive query.'
+complete -c duckcli -s e -l execute -d 'TEXT      Execute command and quit.'
+complete -c duckcli -l help -d 'Show this message and exit.'

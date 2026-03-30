@@ -1,0 +1,5 @@
+complete -c kextstat -s no-kernel -d '(-k): show only loadable kexts (omit kernel components).'
+complete -c kextstat -s list-only -d '(-l): print the list only, omitting the header.'
+complete -c kextstat -s bundle-id -d '(-b) <bundle_id>: print info for kexts named by identifier.'
+complete -c kextstat -s arch -d '(-a): Include architecture info in output.'
+complete -c kextstat -s sort -d '(-s): Sort by load address.'

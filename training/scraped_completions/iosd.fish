@@ -1,0 +1,7 @@
+complete -c iosd -n "__fish_use_subcommand" -s h -l help -d 'Print help'
+complete -c iosd -n "__fish_use_subcommand" -s V -l version -d 'Print version'
+complete -c iosd -n "__fish_use_subcommand" -f -a "nuke-derived-data" -d 'Forcefully deletes the derived data directory where Xcode stores many intermediate products'
+complete -c iosd -n "__fish_use_subcommand" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
+complete -c iosd -n "__fish_seen_subcommand_from nuke-derived-data" -s h -l help -d 'Print help'
+complete -c iosd -n "__fish_seen_subcommand_from help; and not __fish_seen_subcommand_from nuke-derived-data; and not __fish_seen_subcommand_from help" -f -a "nuke-derived-data" -d 'Forcefully deletes the derived data directory where Xcode stores many intermediate products'
+complete -c iosd -n "__fish_seen_subcommand_from help; and not __fish_seen_subcommand_from nuke-derived-data; and not __fish_seen_subcommand_from help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'

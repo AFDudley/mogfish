@@ -1,0 +1,15 @@
+complete -c gow -s h -d 'Print help and exit.'
+complete -c gow -s g -d 'go        Go tool to use.'
+complete -c gow -s v -d 'Verbose logging.'
+complete -c gow -s c -d 'Clear terminal on restart.'
+complete -c gow -s s -d 'Soft-clear terminal, keeping scrollback.'
+complete -c gow -s r -d 'true      Enable terminal raw mode and hotkeys.'
+complete -c gow -s P -d Prefix\ printed\ BEFORE\ each\ run\;\ multi\;\ supports\ \\n.
+complete -c gow -s S -d Suffix\ printed\ AFTER\ each\ run\;\ multi\;\ supports\ \\n.
+complete -c gow -s t -d 'Print error trace on exit. Useful for debugging gow.'
+complete -c gow -s re -d 'gow       Stdin echoing in raw mode. Values: "" (none), "gow", "preserve".'
+complete -c gow -s l -d 'Lazy mode: restart only when subprocess is not running.'
+complete -c gow -s p -d 'Postpone first run until FS event or manual ^R.'
+complete -c gow -s e -d 'go,mod    Extensions to watch; multi.'
+complete -c gow -s w -d '.         Directories to watch, relative to CWD; multi.'
+complete -c gow -s i -d 'Ignored directories, relative to CWD; multi.'

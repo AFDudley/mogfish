@@ -1,0 +1,5 @@
+complete -c apfs_condenser -s p -d 'Synthesized path for the container.'
+complete -c apfs_condenser -s i -d 'Desired filesystem slice.'
+complete -c apfs_condenser -s s -d 'Name of the snapshot to be deleted.'
+complete -c apfs_condenser -s w -d 'Watchdog timeout in seconds.'
+complete -c apfs_condenser -s v -d 'Enable verbose output.'
