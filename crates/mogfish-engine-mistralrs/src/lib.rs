@@ -262,7 +262,7 @@ impl InferenceEngine for MistralRsEngine {
         eprintln!(
             "[annotate] response ({} chars): {:?}",
             raw.len(),
-            &raw[..raw.len().min(500)]
+            &raw
         );
 
         let mut v: serde_json::Value = serde_json::from_str(&raw)
@@ -292,7 +292,7 @@ impl InferenceEngine for MistralRsEngine {
         eprintln!(
             "[classify] response ({} chars): {:?}",
             raw.len(),
-            &raw[..raw.len().min(500)]
+            &raw
         );
 
         let v: serde_json::Value = serde_json::from_str(&raw)
