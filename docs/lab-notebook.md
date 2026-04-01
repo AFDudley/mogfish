@@ -193,6 +193,64 @@ The remaining git annotation failure is model quality — the model wasn't
 trained on short help text inputs and doesn't learn to transition between
 JSON fields. This needs better training data, not more engine parameters.
 
+### 8. GPU inference failure — RTX 5070 Blackwell (2026-04-01)
+
+**Hypothesis:** GPU inference with `MOGFISH_USE_GPU=1` will be faster
+than CPU for batch annotation data generation.
+
+**Result: FAIL — shape mismatch in PagedAttention matmul.**
+
+```
+ERROR mistralrs_core::engine: step - Model failed with error:
+  shape mismatch in matmul, lhs: [2, 4, 23, 256], rhs: [1, 4, 256, 1262]
+```
+
+First few files failed with "A weight is negative, too large or not a
+valid number", then the engine panicked and all remaining files got
+"channel error: channel closed".
+
+The batch dimension mismatch (2 vs 1) suggests PagedAttention is
+constructing KV cache tensors with the wrong batch size for this GPU
+architecture (RTX 5070, sm_120 Blackwell). The forked mistral.rs
+(rev `3cd629537`) predates Blackwell — the PagedAttention CUDA kernels
+likely don't handle sm_120 compute capability correctly.
+
+### 8b. GPU without PagedAttention — still fails (2026-04-01)
+
+Added `from_hf_model_gpu_no_pa()` to bypass PagedAttention and test
+GPU with standard attention. Different error:
+
+```
+CUDA_ERROR_DEINITIALIZED, "<Failure when calling cuGetErrorString()>"
+inference error: A weight is negative, too large or not a valid number
+```
+
+This confirms the problem is not PagedAttention — it's the Q4K
+dequantization CUDA kernels. They don't handle sm_120 (Blackwell,
+compute capability 12.0). The forked mistral.rs rev `3cd629537`
+predates Blackwell support.
+
+**Conclusion:** GPU inference is broken at the kernel level for
+Blackwell GPUs. Fix requires updating the mistral.rs fork to a version
+with sm_120 support. CPU inference works fine for all current needs.
+
+### 9. Training data expansion via exophial (2026-03-30 — 2026-04-01)
+
+Scraped 941 fish completion files from GitHub. Dispatched 3 exophial
+tasks for annotation. Two succeeded, one failed (DPO task couldn't
+access host model from worktree — see feat-agentfs-worktree-isolation
+pebble in exophial repo).
+
+| Source | Records |
+|--------|---------|
+| Original annotation_train.jsonl | 1,010 |
+| Scraped annotations (exophial task) | 1,056 |
+| Short-input augmented (exophial task) | 680 |
+| DPO pairs (running locally) | pending |
+
+Merged dataset: 1,736 unique examples, 3,509 train / 185 eval after
+3x oversampling of short inputs (<500 chars).
+
 ## Open Questions
 
 1. **Constrained generation speed.** ~30s per constrained call at

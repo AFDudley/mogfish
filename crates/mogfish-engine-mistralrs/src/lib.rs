@@ -43,7 +43,9 @@ impl MistralRsEngine {
     /// - A HuggingFace model ID like `"unsloth/gemma-3-1b-it"` (downloaded automatically)
     /// - A local path to a directory containing safetensors + config.json + tokenizer.json
     ///
-    /// `use_gpu`: true to load on GPU (model must fit in VRAM), false for CPU.
+    /// `use_gpu`: true to load on GPU with PagedAttention, false for CPU.
+    /// Use `from_hf_model_gpu_no_pa` for GPU without PagedAttention (e.g.
+    /// on GPUs where PA has kernel compatibility issues).
     pub fn from_hf_model(model_id: &str, use_gpu: bool) -> anyhow::Result<Self> {
         let mut builder = ModelBuilder::new(model_id)
             .with_isq(IsqType::Q4K)
@@ -62,6 +64,21 @@ impl MistralRsEngine {
         } else {
             builder = builder.with_device(Device::Cpu);
         }
+
+        let model = BlockingModel::from_auto_builder(builder)
+            .map_err(|e| anyhow::anyhow!("model load failed: {e}"))?;
+
+        Ok(Self { model })
+    }
+
+    /// Load on GPU without PagedAttention. Uses standard attention with
+    /// the full KV cache in VRAM. Suitable for small models (1B Q4K ~700MB)
+    /// on GPUs where PagedAttention kernels have compatibility issues
+    /// (e.g. Blackwell sm_120).
+    pub fn from_hf_model_gpu_no_pa(model_id: &str) -> anyhow::Result<Self> {
+        let builder = ModelBuilder::new(model_id)
+            .with_isq(IsqType::Q4K)
+            .with_logging();
 
         let model = BlockingModel::from_auto_builder(builder)
             .map_err(|e| anyhow::anyhow!("model load failed: {e}"))?;

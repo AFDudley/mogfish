@@ -141,8 +141,15 @@ fn make_engine(name: &str) -> anyhow::Result<Box<dyn mogfish_traits::InferenceEn
             let use_gpu = std::env::var("MOGFISH_USE_GPU")
                 .map(|v| v == "1" || v == "true")
                 .unwrap_or(false);
-            let engine =
-                mogfish_engine_mistralrs::MistralRsEngine::from_hf_model(&model_id, use_gpu)?;
+            let no_pa = std::env::var("MOGFISH_NO_PAGED_ATTN")
+                .map(|v| v == "1" || v == "true")
+                .unwrap_or(false);
+
+            let engine = if use_gpu && no_pa {
+                mogfish_engine_mistralrs::MistralRsEngine::from_hf_model_gpu_no_pa(&model_id)?
+            } else {
+                mogfish_engine_mistralrs::MistralRsEngine::from_hf_model(&model_id, use_gpu)?
+            };
             Ok(Box::new(engine))
         }
         other => anyhow::bail!("unknown engine: {other}"),
