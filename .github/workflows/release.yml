@@ -12,7 +12,30 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build-linux:
+  build-linux-cpu:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-deb
+        run: cargo install cargo-deb
+
+      - name: Build release binaries (CPU-only)
+        run: cargo build --release -p mogfish-annotator-cli -p mogfish-classify
+
+      - name: Build .deb package
+        run: cargo deb -p mogfish-annotator-cli --no-build
+
+      - name: Upload .deb artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mogfish-deb-cpu
+          path: target/debian/*.deb
+
+  build-linux-cuda:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -26,43 +49,38 @@ jobs:
           cuda: "12.8.0"
           method: network
 
-      - name: Install cargo-deb
-        run: cargo install cargo-deb
+      - name: Build release binaries (CUDA)
+        run: cargo build --release -p mogfish-annotator-cli -p mogfish-classify --features mogfish-engine-mistralrs/cuda
 
-      - name: Build release binaries
-        run: cargo build --release -p mogfish-annotator-cli -p mogfish-classify
+      - name: Package CUDA binary
+        run: |
+          mkdir -p dist
+          cp target/release/mogfish-annotate dist/mogfish-annotate-cuda
+          cp target/release/mogfish-classify dist/
 
-      - name: Build .deb package
-        run: cargo deb -p mogfish-annotator-cli --no-build
-
-      - name: Upload .deb artifact
+      - name: Upload CUDA artifact
         uses: actions/upload-artifact@v4
         with:
-          name: mogfish-deb
-          path: target/debian/*.deb
+          name: mogfish-cuda
+          path: dist/
 
   create-release:
-    needs: build-linux
+    needs: [build-linux-cpu, build-linux-cuda]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download .deb artifact
+      - name: Download CPU .deb
         uses: actions/download-artifact@v4
         with:
-          name: mogfish-deb
+          name: mogfish-deb-cpu
           path: dist/
 
-      - name: Download model from existing release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          mkdir -p dist/model
-          # Model files are uploaded once and reused across releases.
-          # If this is the first release, upload them manually first:
-          #   gh release create v0.1.0-model --repo AFDudley/mogfish \
-          #     model-0.uqff residual.safetensors config.json ...
-          # Then subsequent releases reference them.
+      - name: Download CUDA binary
+        uses: actions/download-artifact@v4
+        with:
+          name: mogfish-cuda
+          path: dist/
 
       - name: Create GitHub release
         env:
@@ -72,4 +90,4 @@ jobs:
           gh release create "${TAG}" \
             --title "mogfish ${TAG}" \
             --generate-notes \
-            dist/*.deb
+            dist/*

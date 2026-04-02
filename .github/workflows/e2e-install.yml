@@ -23,16 +23,10 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install CUDA toolkit
-        uses: Jimver/cuda-toolkit@v0.2.25
-        with:
-          cuda: "12.8.0"
-          method: network
-
       - name: Install cargo-deb
         run: cargo install cargo-deb
 
-      - name: Build release binaries
+      - name: Build release binaries (CPU-only, no CUDA)
         run: |
           cargo build --release -p mogfish-annotator-cli -p mogfish-classify
 
