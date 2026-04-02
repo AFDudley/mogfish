@@ -83,29 +83,64 @@ Training uses LoRA fine-tuning across three tasks:
 
 Training hardware: RTX 5070 (12GB, Unsloth) or M4 Pro (64GB, mlx-lm).
 
+## Install
+
+### Ubuntu/Debian
+
+```bash
+# Download and install the .deb (pulls in fish, downloads the model)
+sudo apt install ./mogfish-annotator-cli_0.1.0-1_amd64.deb
+```
+
+This installs the binaries, fish shell integration, and downloads the
+inference model (~1.2GB) from GitHub releases.
+
+### Set fish as your shell
+
+```bash
+chsh -s /usr/bin/fish
+```
+
+Or launch fish from bash without changing your login shell:
+
+```bash
+fish
+```
+
+Mogfish activates automatically when fish starts. It aliases `bash` to
+`mogfish-bass`, which routes commands through the classifier:
+
+- **Known commands** (git, ls, cargo, etc.) run directly in fish
+- **Cached skills** execute previously generated Mog scripts
+- **Bash-specific syntax** (if/then/fi, heredocs) falls through to
+  real bash via [bass](https://github.com/edc/bass)
+- **Novel intents** generate new skills in the background
+
+AI tools like Claude Code that call `bash -c "CMD"` automatically
+route through mogfish. Over time, the skill cache grows and fewer
+commands need the bash fallback.
+
 ## Building
 
 ```bash
 # Requires Rust 1.85+
-cargo build --workspace
-cargo test --workspace
+cargo build --release -p mogfish-annotator-cli -p mogfish-classify
+
+# With GPU support (requires CUDA 12.8+)
+cargo build --release -p mogfish-annotator-cli --features cuda
 ```
 
-The inference engine crate requires mistral.rs dependencies. See
-`crates/mogfish-engine-mistralrs/Cargo.toml` for details.
+### Build the .deb
+
+```bash
+cargo install cargo-deb
+cargo deb -p mogfish-annotator-cli --no-build
+```
 
 ## Status
 
-See [docs/status.md](docs/status.md) for detailed implementation status.
-
-Core crates are complete and tested (~2,800 lines of code, ~2,100 lines of
-tests). Model training is complete — Pass 1 (annotation), Pass 2 (Mog
-generation), Pass 3 (classification), and combined models have all been
-trained via LoRA on marks (M4 Pro). A 12B experimental model was also trained.
-
-Remaining work: wire `generate_mog()` endpoint, implement MCP server binary,
-deploy trained model for live feedback collection, and fish input pipeline
-integration.
+See [docs/status.md](docs/status.md) for detailed implementation status
+and [docs/lab-notebook.md](docs/lab-notebook.md) for experimental results.
 
 ## License
 
