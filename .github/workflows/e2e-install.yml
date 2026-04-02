@@ -1,0 +1,89 @@
+name: E2E Install Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test-install-ubuntu:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install fish shell
+        run: sudo apt-get update && sudo apt-get install -y fish
+
+      - name: Check fish version
+        run: fish --version
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install CUDA toolkit
+        uses: Jimver/cuda-toolkit@v0.2.25
+        with:
+          cuda: "12.8.0"
+          method: network
+
+      - name: Install cargo-deb
+        run: cargo install cargo-deb
+
+      - name: Build release binaries
+        run: |
+          cargo build --release -p mogfish-annotator-cli -p mogfish-classify
+
+      - name: Build .deb
+        run: cargo deb -p mogfish-annotator-cli --no-build
+
+      - name: Install .deb
+        run: sudo dpkg --force-depends -i target/debian/*.deb
+
+      - name: Verify binaries installed
+        run: |
+          which mogfish-annotate
+          which mogfish-classify
+          which mogfish-model-download
+          mogfish-classify "git status"
+          mogfish-classify "ls -la"
+
+      - name: Verify fish integration files
+        run: |
+          test -f /usr/share/fish/vendor_conf.d/mogfish.fish
+          test -f /usr/share/fish/vendor_functions.d/__mogfish_execute.fish
+          test -f /usr/share/fish/vendor_functions.d/mogfish-enable.fish
+
+      - name: Fish loads mogfish without error
+        run: |
+          fish -c "source /usr/share/fish/vendor_conf.d/mogfish.fish 2>&1; echo 'mogfish conf.d loaded'"
+          fish -c "functions -q mogfish-enable && echo 'mogfish-enable available' || echo 'mogfish-enable NOT found'"
+
+      - name: Download model from release
+        run: |
+          sudo mogfish-model-download /usr/share/mogfish/model v0.1.0
+
+      - name: Verify model files
+        run: |
+          test -f /usr/share/mogfish/model/model-0.uqff
+          test -f /usr/share/mogfish/model/residual.safetensors
+          test -f /usr/share/mogfish/model/config.json
+          test -f /usr/share/mogfish/model/tokenizer.json
+
+      - name: Test annotation on CPU
+        run: |
+          mkdir -p /tmp/e2e-test
+          echo 'complete -c testcmd -s v -l verbose -d "Be verbose"' > /tmp/e2e-test/testcmd.fish
+          echo 'complete -c testcmd -s h -l help -d "Show help"' >> /tmp/e2e-test/testcmd.fish
+          MOGFISH_MODEL_PATH=/usr/share/mogfish/model \
+          MOGFISH_USE_GPU=0 \
+            mogfish-annotate batch --dir /tmp/e2e-test --engine mistralrs
+          grep -q "mog-description" /tmp/e2e-test/testcmd.fish
+
+      - name: Test fast-path classifier
+        run: |
+          result=$(mogfish-classify "git status")
+          echo "Classify result: $result"
+          test "$result" = "known:git"
