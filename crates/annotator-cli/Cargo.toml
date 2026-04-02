@@ -27,7 +27,7 @@ libc = "0.2"
 [package.metadata.deb]
 maintainer = "AFDudley"
 copyright = "2026 AFDudley. All rights reserved."
-depends = "fish (>= 4.0)"
+depends = "fish (>= 4.0), curl"
 section = "utils"
 priority = "optional"
 assets = [
@@ -38,4 +38,5 @@ assets = [
     ["../../share/mogfish/functions/*.fish", "usr/share/fish/vendor_functions.d/", "644"],
 ]
 conf-files = ["/usr/share/fish/vendor_conf.d/mogfish.fish"]
+maintainer-scripts = "../../debian/"
 

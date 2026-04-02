@@ -1,0 +1,14 @@
+#!/bin/bash
+set -e
+
+case "$1" in
+    configure)
+        echo "mogfish: downloading inference model..."
+        if mogfish-model-download /usr/share/mogfish/model v0.1.0; then
+            echo "mogfish: model installed"
+        else
+            echo "mogfish: WARNING — model download failed." >&2
+            echo "mogfish: run 'mogfish-model-download' manually to retry." >&2
+        fi
+        ;;
+esac
