@@ -27,7 +27,7 @@ libc = "0.2"
 [package.metadata.deb]
 maintainer = "AFDudley"
 copyright = "2026 AFDudley. All rights reserved."
-depends = "fish (>= 4.0), curl"
+depends = "fish (>= 3.6), curl"
 section = "utils"
 priority = "optional"
 assets = [
