@@ -27,7 +27,7 @@ libc = "0.2"
 [package.metadata.deb]
 maintainer = "AFDudley"
 copyright = "2026 AFDudley. All rights reserved."
-depends = "fish (>= 3.6), curl"
+depends = "fish (>= 3.6), curl, python3"
 section = "utils"
 priority = "optional"
 assets = [
@@ -36,6 +36,7 @@ assets = [
     ["../../scripts/mogfish-model-download", "usr/bin/", "755"],
     ["../../share/mogfish/conf.d/mogfish.fish", "usr/share/fish/vendor_conf.d/", "644"],
     ["../../share/mogfish/functions/*.fish", "usr/share/fish/vendor_functions.d/", "644"],
+    ["../../share/mogfish/functions/__bass.py", "usr/share/fish/vendor_functions.d/", "644"],
 ]
 conf-files = ["/usr/share/fish/vendor_conf.d/mogfish.fish"]
 maintainer-scripts = "../../debian/"
