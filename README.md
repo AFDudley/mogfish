@@ -120,6 +120,26 @@ AI tools like Claude Code that call `bash -c "CMD"` automatically
 route through mogfish. Over time, the skill cache grows and fewer
 commands need the bash fallback.
 
+### Claude Code integration
+
+Claude Code hardcodes zsh as its shell and ignores `$SHELL`. The
+`claude-mogfish` launcher works around this with a zsh shim that
+intercepts Claude Code's commands and runs them in fish:
+
+```fish
+claude-mogfish
+```
+
+This prepends `mogfish-shims/` to PATH so Claude Code's zsh calls
+hit the shim. The shim extracts the actual command from Claude Code's
+wrapper format and runs it in fish where mogfish-bass is active.
+Known commands execute in fish natively; bash-specific syntax falls
+through to bass.
+
+The shim is safe — it only affects the Claude Code process. Your
+system zsh at `/usr/bin/zsh` is untouched. Other terminals, scripts,
+and tmux panes use the real zsh/fish normally.
+
 ## Building
 
 ```bash

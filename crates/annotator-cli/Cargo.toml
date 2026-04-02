@@ -34,6 +34,8 @@ assets = [
     ["target/release/mogfish-annotate", "usr/bin/", "755"],
     ["target/release/mogfish-classify", "usr/bin/", "755"],
     ["../../scripts/mogfish-model-download", "usr/bin/", "755"],
+    ["../../scripts/claude-mogfish", "usr/bin/", "755"],
+    ["../../scripts/mogfish-shims/zsh", "usr/lib/mogfish/shims/", "755"],
     ["../../share/mogfish/conf.d/mogfish.fish", "usr/share/fish/vendor_conf.d/", "644"],
     ["../../share/mogfish/functions/*.fish", "usr/share/fish/vendor_functions.d/", "644"],
     ["../../share/mogfish/functions/__bass.py", "usr/share/fish/vendor_functions.d/", "644"],

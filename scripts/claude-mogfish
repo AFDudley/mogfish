@@ -1,0 +1,20 @@
+#!/usr/bin/env fish
+# claude-mogfish — Launch Claude Code with mogfish routing
+#
+# Prepends mogfish zsh shim to PATH so Claude Code's zsh calls
+# hit the shim, which extracts the actual command and runs it
+# in fish where mogfish-bass is active.
+#
+# The shim only affects this Claude Code process. System zsh is
+# untouched.
+
+if test -x /usr/lib/mogfish/shims/zsh
+    set -x PATH /usr/lib/mogfish/shims $PATH
+else if test -x $HOME/bin/mogfish-shims/zsh
+    set -x PATH $HOME/bin/mogfish-shims $PATH
+else
+    echo "mogfish: zsh shim not found" >&2
+    exit 1
+end
+
+exec claude $argv

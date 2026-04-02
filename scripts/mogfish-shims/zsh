@@ -1,0 +1,38 @@
+#!/bin/bash
+# mogfish zsh shim — intercepts Claude Code's zsh invocations
+# and routes the actual command through fish + mogfish-bass.
+#
+# Claude Code calls: /usr/bin/zsh -c "source snapshot && ... && eval 'CMD' < /dev/null && pwd -P >| /tmp/cwd-file"
+# This shim extracts CMD and runs it in fish where mogfish is active.
+#
+# Falls back to real /usr/bin/zsh for non-Claude invocations.
+
+if [ "$1" != "-c" ]; then
+    exec /usr/bin/zsh "$@"
+fi
+
+shift
+full_cmd="$*"
+
+# Extract the eval'd command: everything between eval ' and ' < /dev/null
+# Claude Code wraps with: eval 'ACTUAL_CMD' < /dev/null && pwd -P >| /tmp/claude-*-cwd
+actual_cmd=$(echo "$full_cmd" | sed -n "s/.*eval '\\(.*\\)' < \\/dev\\/null.*/\\1/p")
+
+if [ -z "$actual_cmd" ]; then
+    # Not a Claude Code command pattern — pass through to real zsh
+    exec /usr/bin/zsh -c "$full_cmd"
+fi
+
+# Extract the cwd output file path
+cwd_file=$(echo "$full_cmd" | grep -oP '/tmp/claude-[a-z0-9]+-cwd')
+
+# Run the actual command in fish (where mogfish-bass is active)
+fish -c "$actual_cmd"
+exit_code=$?
+
+# Write cwd for Claude Code to track directory changes
+if [ -n "$cwd_file" ]; then
+    pwd -P > "$cwd_file"
+fi
+
+exit $exit_code
