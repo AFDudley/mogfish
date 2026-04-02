@@ -274,35 +274,82 @@ Testing requires integrating a 1-bit inference backend, which is a
 significant effort. The model exists and is downloadable but isn't
 plug-compatible with the HF safetensors ecosystem.
 
-### 11. Expanded dataset retraining (2026-04-01, in progress)
+### 11. Expanded dataset retraining (2026-04-01)
 
-Training Gemma 3 1B on expanded dataset (3,509 train / 185 eval) on
-marks via mlx-lm LoRA. Config: rank 16, alpha 32, 877 iterations,
-batch 4, lr 1e-5.
+**Hypothesis:** Retraining on 3,509 examples (3.5x original, with 3x
+oversampling of short inputs) fixes the git annotation failure.
 
-Loss curve (in progress):
+**Training:** marks (M4 Pro, 64GB), mlx-lm LoRA, rank 16, alpha 32,
+877 iterations, batch 4, lr 1e-5, max_seq_length 2048.
+
+**Loss curve:**
 - Iter 1: val 3.051
 - Iter 10: train 2.472
-- Iter 20: train 1.901
-- Iter 30: train 1.581
 - Iter 50: train 1.431
+- Iter 877: train 0.873, val 1.043
+
+**Result: 4/4 acceptance tests pass on both GPU and CPU.**
+
+| Test | GPU (Blackwell) | CPU (Ryzen 9 7950X) |
+|------|----------------|---------------------|
+| rsync annotate (constrained) | pass | pass, ~44s inference |
+| git annotate (constrained) | pass | pass, ~41s inference |
+| classify (constrained) | pass | pass, ~42s inference |
+| generate_mog (free-form) | pass | pass, ~4s inference |
+| **Total (incl model load)** | **23.6s** | **138.6s** |
+
+The git annotation that previously failed now produces complete JSON:
+description + 5 intents + 10–15 flags, no whitespace padding, no
+repetition loops.
+
+**Conclusion:** The expanded training dataset fixed the short-input
+failure. The model generalizes correctly to minimal help text inputs.
+
+### 12. CPU memory footprint (2026-04-02)
+
+**Hypothesis:** The model fits in <1GB RAM on CPU (deployment target
+for lightweight VMs).
+
+**Result: FAIL — 2,115 MB RSS.**
+
+The peak memory is ~2.1GB because ISQ loads the full BF16 model
+(~1.9GB) into memory, quantizes to Q4K (~700MB), and briefly holds
+both copies. After quantization completes, resident memory would drop
+to ~700MB + KV cache + runtime, but the peak allocation exceeds the
+target.
+
+**Fix:** Load a pre-quantized model (UQFF or pre-quantized safetensors)
+to skip the BF16 intermediate. Peak memory would then be ~700MB +
+overhead, within the <1GB target.
+
+### 13. Per-test CPU timing (2026-04-02)
+
+Ran each test individually to isolate inference time from model load
+(~8s on CPU).
+
+| Test | Wall time (incl load) | Inference est. | Type |
+|------|----------------------|----------------|------|
+| rsync annotate | 52s | ~44s | JSON schema constrained |
+| git annotate | 49s | ~41s | JSON schema constrained |
+| classify | 50s | ~42s | JSON schema constrained |
+| generate_mog | 12s | ~4s | Free-form |
+
+Constrained generation is ~10x slower than free-form on CPU due to
+grammar FSM evaluation over the 262K token vocabulary at each step.
+For interactive classification, free-form + post-hoc JSON parsing
+would give ~4s latency vs ~42s with grammar constraints.
 
 ## Open Questions
 
-1. **Constrained generation speed.** ~30s per constrained call at
-   max_len 512 (down from ~75s at 1024). Still slow for interactive use.
-   Free-form is ~3 seconds. Batch annotation is fine.
+1. **Constrained generation speed on CPU.** ~42s per constrained call
+   is too slow for interactive use. Free-form is ~4s. Options:
+   free-form + post-hoc JSON parse for interactive paths, grammar
+   constraints only for batch annotation.
 
-2. **Memory footprint.** Not yet measured in release mode. Need to
-   verify the <1GB target.
+2. **Memory footprint.** 2.1GB peak RSS due to ISQ BF16→Q4K
+   conversion. Need pre-quantized model format (UQFF or pre-quantized
+   safetensors) to hit <1GB target.
 
-3. **Combined-ordered-v1 vs combined-v1.** We fused `combined-v1` (the
-   shuffled variant). The `combined-ordered-v1` adapter (annotation
-   examples last, exploiting recency bias) might produce better
-   annotation quality. It doesn't exist on kelce — check if it was ever
-   produced.
-
-4. **Git annotation quality.** The model fails on short help text
-   ("git - the stupid content tracker"). Needs either richer input
-   (pass the full git help text) or training data that covers short
-   inputs.
+3. **Pre-quantized model packaging.** The `create-uqff` binary exists
+   in the engine crate. Need to run it against the fused expanded-v1
+   model and test loading via `from_uqff()` on CPU.
