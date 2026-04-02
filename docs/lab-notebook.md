@@ -251,6 +251,42 @@ pebble in exophial repo).
 Merged dataset: 1,736 unique examples, 3,509 train / 185 eval after
 3x oversampling of short inputs (<500 chars).
 
+### 10. Bonsai-8B 1-bit model evaluation attempt (2026-04-01)
+
+**Hypothesis:** PrismML's Bonsai-8B (1.15GB, Qwen3 architecture) can
+be loaded through the mogfish engine for quality comparison against
+Gemma 1B.
+
+**Result: BLOCKED — custom weight format incompatible with mistral.rs.**
+
+Downloaded both GGUF (1.16GB) and MLX (1.28GB safetensors) variants.
+The MLX variant reports `hidden_size: 4096` in config.json but the
+actual `embed_tokens.weight` shape is `[151669, 128]` — weights are
+packed 32 1-bit values per element (4096/32 = 128). mistral.rs expects
+unpacked weights and fails with shape mismatch.
+
+The model requires a runtime that understands 1-bit packed weights.
+Options: PrismML's own inference code, QVAC Fabric (Tether's BitNet
+runtime), or adding 1-bit unpacking to mistral.rs/candle.
+
+**Conclusion:** Can't evaluate Bonsai-8B through our current engine.
+Testing requires integrating a 1-bit inference backend, which is a
+significant effort. The model exists and is downloadable but isn't
+plug-compatible with the HF safetensors ecosystem.
+
+### 11. Expanded dataset retraining (2026-04-01, in progress)
+
+Training Gemma 3 1B on expanded dataset (3,509 train / 185 eval) on
+marks via mlx-lm LoRA. Config: rank 16, alpha 32, 877 iterations,
+batch 4, lr 1e-5.
+
+Loss curve (in progress):
+- Iter 1: val 3.051
+- Iter 10: train 2.472
+- Iter 20: train 1.901
+- Iter 30: train 1.581
+- Iter 50: train 1.431
+
 ## Open Questions
 
 1. **Constrained generation speed.** ~30s per constrained call at
