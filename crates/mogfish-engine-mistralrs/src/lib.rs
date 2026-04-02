@@ -14,7 +14,7 @@ use mistralrs::blocking::BlockingModel;
 use mistralrs::{
     Constraint, Device, DrySamplingParams, IsqType, MemoryGpuConfig, ModelBuilder,
     PagedAttentionMetaBuilder, RequestBuilder, TextMessageRole, TextMessages,
-    UqffVisionModelBuilder,
+    TextModelBuilder, UqffTextModelBuilder,
 };
 use mogfish_traits::{
     Annotation, Classification, ClassificationCategory, GroundingContext, InferenceEngine,
@@ -100,20 +100,16 @@ impl MistralRsEngine {
     /// `model_id` is the HF model directory (for tokenizer, config, etc.).
     /// `uqff_path` is the path to the first `.uqff` shard file (remaining
     /// shards are auto-discovered).
-    ///
-    /// Uses the vision pipeline because Gemma3 is detected as a vision
-    /// architecture by mistral.rs, even for text-only inference.
     pub fn from_uqff(model_id: &str, uqff_path: &Path, use_gpu: bool) -> anyhow::Result<Self> {
         if !uqff_path.exists() {
             anyhow::bail!("UQFF file not found: {}", uqff_path.display());
         }
 
         let uqff_builder =
-            UqffVisionModelBuilder::new(model_id, vec![PathBuf::from(uqff_path)]);
-        let mut builder = uqff_builder.into_inner();
+            UqffTextModelBuilder::new(model_id, vec![PathBuf::from(uqff_path)]);
+        let mut builder: TextModelBuilder = uqff_builder.into();
 
         if use_gpu {
-            // Same KV cache limit as from_hf_model — see comment there.
             builder = builder.with_paged_attn(
                 PagedAttentionMetaBuilder::default()
                     .with_gpu_memory(MemoryGpuConfig::ContextSize(4096))
@@ -125,19 +121,9 @@ impl MistralRsEngine {
 
         builder = builder.with_logging();
 
-        // BlockingModel only has from_builder(TextModelBuilder) and
-        // from_auto_builder(ModelBuilder). VisionModelBuilder requires
-        // manual runtime creation + async build.
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .context("failed to create tokio runtime")?;
-
-        let model_inner = rt
-            .block_on(builder.build())
+        let model = BlockingModel::from_builder(builder)
             .map_err(|e| anyhow::anyhow!("UQFF model load failed: {e}"))?;
 
-        let model = BlockingModel::new(model_inner, std::sync::Arc::new(rt));
         Ok(Self { model })
     }
 

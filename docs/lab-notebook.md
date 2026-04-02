@@ -348,12 +348,46 @@ would give ~4s latency vs ~42s with grammar constraints.
    constrained JSON decoding (~42s/call), and latency doesn't matter
    there.
 
+### 14. UQFF pre-quantized loading — memory footprint (2026-04-02)
+
+**Hypothesis:** Loading from UQFF (pre-quantized Q4K) skips the BF16
+intermediate and brings peak RSS under 1GB.
+
+**Setup:** Created UQFF via `create-uqff` binary. Output: `model-0.uqff`
+(582MB Q4K weights) + `residual.safetensors` (577MB non-quantizable
+tensors at BF16). Fixed `from_uqff()` to use `UqffTextModelBuilder`
+instead of `UqffVisionModelBuilder`.
+
+**Result: PARTIAL — 877–1,177 MB RSS depending on measurement timing.**
+
+| Loading method | Peak RSS | Load time | Notes |
+|---------------|----------|-----------|-------|
+| HF safetensors + ISQ | 2,115 MB | ~8s | Holds BF16 + Q4K simultaneously |
+| UQFF pre-quantized | 877–1,177 MB | ~4s | No BF16 intermediate |
+
+The UQFF path is 2x better than ISQ but still around 1GB. The floor
+is set by `residual.safetensors` (577MB) — the 262K vocabulary embedding
+at BF16 is 262144 × 1152 × 2 = ~576MB alone. The Q4K quantized layers
+add ~582MB. Both must be resident.
+
+**Note:** mistral.rs loads on GPU even with `MOGFISH_USE_GPU=0` when
+using the UQFF path — the device flag may not propagate through
+`UqffTextModelBuilder`. Needs investigation.
+
+**Conclusion:** UQFF halves peak memory but doesn't hit <1GB. The
+bottleneck is the vocabulary embedding size. Hitting <1GB requires
+either quantized embeddings (not standard in ISQ/UQFF), a smaller
+vocabulary model, or a model architecture with tied/compressed
+embeddings.
+
 ## Open Questions
 
-1. **Memory footprint.** 2.1GB peak RSS due to ISQ BF16→Q4K
-   conversion. Need pre-quantized model format (UQFF or pre-quantized
-   safetensors) to hit <1GB target.
+1. **UQFF CPU device.** `from_uqff()` with `MOGFISH_USE_GPU=0` still
+   loads on `cuda[0]`. The `with_device(Device::Cpu)` call may not
+   propagate through the `UqffTextModelBuilder` → `TextModelBuilder`
+   conversion. Needs debugging.
 
-2. **Pre-quantized model packaging.** The `create-uqff` binary exists
-   in the engine crate. Need to run it against the fused expanded-v1
-   model and test loading via `from_uqff()` on CPU.
+2. **Vocabulary embedding size.** The 262K vocab × 1152 hidden × BF16
+   residual is 576MB — more than half the memory budget. Options:
+   quantize embeddings, use a model with smaller vocabulary, or accept
+   ~1.2GB as the floor for Gemma 3 1B.
