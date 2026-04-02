@@ -339,17 +339,21 @@ grammar FSM evaluation over the 262K token vocabulary at each step.
 For interactive classification, free-form + post-hoc JSON parsing
 would give ~4s latency vs ~42s with grammar constraints.
 
+## Design Decisions
+
+1. **Constrained JSON is batch-only.** The interactive path (classify →
+   generate Mog → compile → run → cache) doesn't use JSON schema
+   constraints. `classify` returns a label, `generate_mog` is free-form.
+   Both take ~4s on CPU. Only the background annotator daemon uses
+   constrained JSON decoding (~42s/call), and latency doesn't matter
+   there.
+
 ## Open Questions
 
-1. **Constrained generation speed on CPU.** ~42s per constrained call
-   is too slow for interactive use. Free-form is ~4s. Options:
-   free-form + post-hoc JSON parse for interactive paths, grammar
-   constraints only for batch annotation.
-
-2. **Memory footprint.** 2.1GB peak RSS due to ISQ BF16→Q4K
+1. **Memory footprint.** 2.1GB peak RSS due to ISQ BF16→Q4K
    conversion. Need pre-quantized model format (UQFF or pre-quantized
    safetensors) to hit <1GB target.
 
-3. **Pre-quantized model packaging.** The `create-uqff` binary exists
+2. **Pre-quantized model packaging.** The `create-uqff` binary exists
    in the engine crate. Need to run it against the fused expanded-v1
    model and test loading via `from_uqff()` on CPU.
