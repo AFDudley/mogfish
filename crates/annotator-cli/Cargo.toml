@@ -23,3 +23,19 @@ ctrlc = { version = "3", features = ["termination"] }
 [dev-dependencies]
 tempfile.workspace = true
 libc = "0.2"
+
+[package.metadata.deb]
+maintainer = "AFDudley"
+copyright = "2026 AFDudley. All rights reserved."
+depends = "fish (>= 4.0)"
+section = "utils"
+priority = "optional"
+assets = [
+    ["target/release/mogfish-annotate", "usr/bin/", "755"],
+    ["target/release/mogfish-classify", "usr/bin/", "755"],
+    ["../../scripts/mogfish-model-download", "usr/bin/", "755"],
+    ["../../share/mogfish/conf.d/mogfish.fish", "usr/share/fish/vendor_conf.d/", "644"],
+    ["../../share/mogfish/functions/*.fish", "usr/share/fish/vendor_functions.d/", "644"],
+]
+conf-files = ["/usr/share/fish/vendor_conf.d/mogfish.fish"]
+

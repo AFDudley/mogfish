@@ -1,0 +1,44 @@
+#!/bin/bash
+# Download the mogfish inference model from GitHub releases.
+#
+# Usage: mogfish-model-download [--dir /path/to/model] [--version v0.1.0]
+
+set -euo pipefail
+
+REPO="AFDudley/mogfish"
+VERSION="${2:-v0.1.0}"
+DEFAULT_DIR="/usr/share/mogfish/model"
+MODEL_DIR="${1:-$DEFAULT_DIR}"
+
+echo "Downloading mogfish model ${VERSION} to ${MODEL_DIR}..."
+mkdir -p "${MODEL_DIR}"
+
+if command -v gh &>/dev/null && gh auth status &>/dev/null; then
+    gh release download "${VERSION}" \
+        --repo "${REPO}" \
+        --dir "${MODEL_DIR}" \
+        --clobber
+else
+    # Fall back to curl
+    BASE_URL="https://github.com/${REPO}/releases/download/${VERSION}"
+    for file in model-0.uqff residual.safetensors config.json tokenizer.json \
+                tokenizer_config.json tokenizer.model special_tokens_map.json \
+                added_tokens.json generation_config.json chat_template.jinja; do
+        echo "  ${file}..."
+        curl -L -o "${MODEL_DIR}/${file}" "${BASE_URL}/${file}" \
+            --progress-bar --fail || {
+            echo "Warning: failed to download ${file}"
+        }
+    done
+fi
+
+# Verify critical files
+for file in model-0.uqff residual.safetensors config.json tokenizer.json; do
+    if [ ! -f "${MODEL_DIR}/${file}" ]; then
+        echo "ERROR: Missing ${file}" >&2
+        exit 1
+    fi
+done
+
+echo "Model installed at ${MODEL_DIR}"
+echo "Size: $(du -sh "${MODEL_DIR}" | cut -f1)"

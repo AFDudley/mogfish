@@ -145,7 +145,34 @@ fn make_engine(name: &str) -> anyhow::Result<Box<dyn mogfish_traits::InferenceEn
                 .map(|v| v == "1" || v == "true")
                 .unwrap_or(false);
 
-            let engine = if use_gpu && no_pa {
+            // Detect UQFF: look for model-0.uqff in the model directory
+            let model_path = std::path::Path::new(&model_id);
+            let uqff_path = if model_path.is_dir() {
+                let candidate = model_path.join("model-0.uqff");
+                if candidate.exists() {
+                    Some(candidate)
+                } else {
+                    None
+                }
+            } else if model_id.ends_with(".uqff") {
+                Some(model_path.to_path_buf())
+            } else {
+                None
+            };
+
+            let engine = if let Some(uqff) = uqff_path {
+                let model_dir = if model_path.is_dir() {
+                    model_id.clone()
+                } else {
+                    uqff.parent()
+                        .expect("UQFF path must have parent")
+                        .to_string_lossy()
+                        .to_string()
+                };
+                mogfish_engine_mistralrs::MistralRsEngine::from_uqff(
+                    &model_dir, &uqff, use_gpu,
+                )?
+            } else if use_gpu && no_pa {
                 mogfish_engine_mistralrs::MistralRsEngine::from_hf_model_gpu_no_pa(&model_id)?
             } else {
                 mogfish_engine_mistralrs::MistralRsEngine::from_hf_model(&model_id, use_gpu)?
