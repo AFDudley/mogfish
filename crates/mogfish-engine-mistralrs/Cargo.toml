@@ -12,7 +12,7 @@ cuda = ["mistralrs/cuda"]
 
 [dependencies]
 mogfish-traits = { path = "../mogfish-traits" }
-mistralrs = { git = "https://github.com/AFDudley/mistral.rs.git", rev = "16d583b58" }
+mistralrs = { git = "https://github.com/AFDudley/mistral.rs.git", rev = "aa1f16689" }
 serde_json.workspace = true
 serde = { workspace = true, features = ["derive"] }
 anyhow.workspace = true
