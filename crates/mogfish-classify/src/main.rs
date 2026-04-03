@@ -34,7 +34,14 @@ const DEFAULT_KNOWN_COMMANDS: &[&str] = &[
 ];
 
 fn main() {
-    let input = env::args().nth(1).unwrap_or_default();
+    let args: Vec<String> = env::args().skip(1).collect();
+    // Skip leading "--" separator if present
+    let input_args = if args.first().map(|a| a.as_str()) == Some("--") {
+        &args[1..]
+    } else {
+        &args[..]
+    };
+    let input = input_args.join(" ");
 
     // Empty input → passthrough
     if input.trim().is_empty() {
