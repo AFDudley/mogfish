@@ -24,6 +24,10 @@ use mogfish_traits::{
 /// can be 200KB+ (git.fish); we truncate to fit the context window.
 const MAX_INPUT_CHARS: usize = 8000;
 
+/// Mog language reference, embedded at compile time. Included in the
+/// system prompt for generate_mog to match the training data format.
+const MOG_SPEC: &str = include_str!("../../../mog/docs/context.md");
+
 /// Inference engine backed by mistral.rs for local safetensors inference.
 ///
 /// Uses `BlockingModel` which owns a tokio runtime internally, bridging
@@ -307,8 +311,10 @@ impl InferenceEngine for MistralRsEngine {
     }
 
     fn generate_mog(&self, intent: &str, context: &GroundingContext) -> anyhow::Result<String> {
-        // Match the training data format: instruction/input pairs for Mog generation
-        let system = "Generate a Mog script for this task";
+        // System prompt matches training format: instruction + full Mog spec
+        let system = format!(
+            "Generate a Mog script for this task. Use the Mog language reference below.\n\n{MOG_SPEC}"
+        );
 
         let mut user_msg = intent.to_string();
         if !context.available_commands.is_empty() {
@@ -318,6 +324,6 @@ impl InferenceEngine for MistralRsEngine {
             ));
         }
 
-        self.chat_free(system, &user_msg)
+        self.chat_free(&system, &user_msg)
     }
 }
