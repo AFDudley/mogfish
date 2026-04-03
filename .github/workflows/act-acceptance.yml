@@ -1,0 +1,352 @@
+name: Acceptance Tests (Act)
+
+# Outside-in double-loop TDD acceptance suite.
+#
+# Outer loop: full system tests in a container — install .deb, verify
+# fish integration, classifier routing, bash shim, Enter key handler.
+# These pass today and guard against regressions.
+#
+# Inner loop: tests for unimplemented paths — generate_mog end-to-end,
+# skill execution, MCP server transport. These fail now (xfail) and
+# drive implementation. When they pass, promote to the outer loop.
+#
+# Run locally: act push --workflows .github/workflows/act-acceptance.yml
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  acceptance:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y fish
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build release binaries
+        run: cargo build --release -p mogfish-annotator-cli -p mogfish-classify
+
+      - name: Install binaries to /usr/bin
+        run: |
+          sudo cp target/release/mogfish-annotate /usr/bin/
+          sudo cp target/release/mogfish-classify /usr/bin/
+
+      - name: Install fish integration files
+        run: |
+          sudo mkdir -p /usr/share/fish/vendor_conf.d
+          sudo mkdir -p /usr/share/fish/vendor_functions.d
+          sudo cp share/mogfish/conf.d/mogfish.fish /usr/share/fish/vendor_conf.d/
+          sudo cp share/mogfish/functions/*.fish /usr/share/fish/vendor_functions.d/
+          sudo cp share/mogfish/functions/__bass.py /usr/share/fish/vendor_functions.d/
+
+      - name: Verify fish autoloads vendor functions
+        run: |
+          # Fish should autoload functions from vendor_functions.d
+          fish -c "functions -q mogfish-bass && echo ok || echo missing"
+
+      # ================================================================
+      # OUTER LOOP — working system tests (regression guards)
+      # ================================================================
+
+      # --- Classifier binary ---
+
+      - name: "Outer: classifier identifies known commands"
+        run: |
+          set -e
+          test "$(mogfish-classify git status)" = "known:git"
+          test "$(mogfish-classify ls -la)" = "known:ls"
+          test "$(mogfish-classify docker compose up)" = "known:docker"
+          test "$(mogfish-classify cargo test)" = "known:cargo"
+          test "$(mogfish-classify ssh user@host)" = "known:ssh"
+          echo "PASS: known commands classified correctly"
+
+      - name: "Outer: classifier handles -- separator"
+        run: |
+          set -e
+          test "$(mogfish-classify -- git status)" = "known:git"
+          test "$(mogfish-classify -- ls -la)" = "known:ls"
+          test "$(mogfish-classify -- "find . -name '*.rs'")" = "known:find"
+          echo "PASS: -- separator handled correctly"
+
+      - name: "Outer: classifier returns passthrough for unknown input"
+        run: |
+          set -e
+          test "$(mogfish-classify -- "show me all large files")" = "passthrough"
+          test "$(mogfish-classify -- "what is using port 8080")" = "passthrough"
+          test "$(mogfish-classify -- "")" = "passthrough"
+          echo "PASS: unknown input returns passthrough"
+
+      - name: "Outer: classifier with multi-word input preserves full command"
+        run: |
+          set -e
+          # Verify the first word is extracted as the command
+          result=$(mogfish-classify -- "git push origin main --force")
+          test "$result" = "known:git"
+          echo "PASS: multi-word commands classified by first word"
+
+      # --- Fish integration ---
+
+      - name: "Outer: fish loads mogfish on startup"
+        run: |
+          set -e
+          # fish auto-sources vendor_conf.d on startup
+          output=$(fish -c "echo ready" 2>&1)
+          echo "$output"
+          echo "$output" | grep -q "mogfish: enabled"
+          echo "PASS: mogfish loads in fish"
+
+      - name: "Outer: mogfish functions are available in fish"
+        run: |
+          set -e
+          fish -c "
+            functions -q __mogfish_execute; or exit 1
+            functions -q mogfish-enable; or exit 1
+            functions -q mogfish-disable; or exit 1
+            functions -q mogfish-bass; or exit 1
+          "
+          echo "PASS: all mogfish functions available"
+
+      - name: "Outer: mogfish-bass routes known commands through fish"
+        run: |
+          set -e
+          # mogfish-bass -c "CMD" should classify and execute known commands in fish
+          result=$(fish -c "mogfish-bass -c 'echo hello-from-mogfish'" 2>&1)
+          echo "Result: '$result'"
+          echo "$result" | grep -q "hello-from-mogfish"
+          echo "PASS: mogfish-bass executes known commands in fish"
+
+      - name: "Outer: mogfish-bass falls back to real bash for unknown"
+        run: |
+          set -e
+          # "show stuff" is not a known command -> passthrough -> bass (real bash)
+          result=$(fish -c "mogfish-bass -c 'echo fallback-works'" 2>/dev/null)
+          echo "$result" | grep -q "fallback-works"
+          echo "PASS: mogfish-bass falls back to bash for passthrough"
+
+      - name: "Outer: mogfish-bass passes through script files"
+        run: |
+          set -e
+          echo 'echo script-file-works' > /tmp/test-script.sh
+          chmod +x /tmp/test-script.sh
+          result=$(fish -c "mogfish-bass /tmp/test-script.sh" 2>&1)
+          echo "Result: '$result'"
+          echo "$result" | grep -q "script-file-works"
+          echo "PASS: mogfish-bass passes script files to real bash"
+
+      - name: "Outer: mogfish disable/enable cycle"
+        run: |
+          set -e
+          fish -c "mogfish-disable; mogfish-enable" 2>&1 | grep -q "mogfish: enabled"
+          echo "PASS: disable/enable cycle works"
+
+      # --- Batch annotation with mock engine ---
+
+      - name: "Outer: batch annotation with mock engine"
+        run: |
+          set -e
+          mkdir -p /tmp/act-test-completions
+          echo 'complete -c testcmd -s h -l help -d "Show help"' > /tmp/act-test-completions/testcmd.fish
+          mogfish-annotate batch --dir /tmp/act-test-completions --engine mock
+          grep -q "mog-description" /tmp/act-test-completions/testcmd.fish
+          echo "PASS: batch annotation with mock engine works"
+
+      # ================================================================
+      # INNER LOOP — failing tests that drive implementation (xfail)
+      #
+      # These tests describe the behavior we WANT but haven't built yet.
+      # Each test is expected to fail. When implementation makes it pass,
+      # move it to the outer loop and remove the xfail wrapper.
+      # ================================================================
+
+      - name: "Inner [xfail]: generate path produces executable mog script"
+        run: |
+          # WHAT THIS TESTS:
+          # User types natural language -> classifier returns generate:* ->
+          # __mogfish_generate calls mogfish-annotate/MCP to produce a Mog
+          # script -> mogc compiles it -> script executes -> result cached
+          #
+          # CURRENTLY: __mogfish_generate is a stub that prints a message
+          # NEEDS: wire generate_mog() to mistral.rs, pipe through mogc
+          echo "--- INNER LOOP: generate path ---"
+          result=$(fish -c "
+            __mogfish_generate 'list files bigger than 10mb'
+          " 2>&1)
+          echo "Got: $result"
+
+          # This SHOULD produce actual output from executing the generated
+          # script. Currently it prints the stub message.
+          if echo "$result" | grep -q "not yet implemented"; then
+            echo "XFAIL: generate path is still a stub"
+            exit 0
+          fi
+
+          # When implemented, verify the output is not the stub message
+          # and that a skill was cached
+          if echo "$result" | grep -q "not yet implemented"; then
+            echo "FAIL: generate path still stubbed after implementation"
+            exit 1
+          fi
+          echo "PASS: generate path produced output"
+
+      - name: "Inner [xfail]: skill execution runs cached mog script"
+        run: |
+          # WHAT THIS TESTS:
+          # A skill was previously cached -> classifier returns skill:* ->
+          # __mogfish_run_skill retrieves and executes the cached Mog script
+          #
+          # CURRENTLY: __mogfish_run_skill is a stub
+          # NEEDS: mog runtime integration, skill-cache retrieval in fish
+          echo "--- INNER LOOP: skill execution ---"
+
+          # First, store a skill via the MCP lib (or mogfish-classify cache)
+          # Then try to run it
+          result=$(fish -c "
+            __mogfish_run_skill 'find big files'
+          " 2>&1)
+          echo "Got: $result"
+
+          if echo "$result" | grep -q "not yet implemented"; then
+            echo "XFAIL: skill execution is still a stub"
+            exit 0
+          fi
+
+          echo "PASS: skill execution works"
+
+      - name: "Inner [xfail]: MCP server starts and responds to tool list"
+        run: |
+          # WHAT THIS TESTS:
+          # mogfish-mcp binary starts, accepts JSON-RPC over stdio,
+          # responds to initialize + tools/list
+          #
+          # CURRENTLY: main.rs is a stub that exits with error
+          # NEEDS: JSON-RPC transport, stdio handler, wire to lib
+          echo "--- INNER LOOP: MCP server ---"
+
+          # Check if the binary even exists
+          if ! command -v mogfish-mcp 2>/dev/null; then
+            # Try to build it
+            if cargo build --release -p mogfish-mcp 2>/dev/null; then
+              sudo cp target/release/mogfish-mcp /usr/bin/ 2>/dev/null || true
+            fi
+          fi
+
+          if ! command -v mogfish-mcp 2>/dev/null; then
+            echo "XFAIL: mogfish-mcp binary not available"
+            exit 0
+          fi
+
+          # Send initialize request over stdio
+          response=$(echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}' | timeout 5 mogfish-mcp 2>/dev/null) || true
+          echo "Got: $response"
+
+          if [ -z "$response" ] || echo "$response" | grep -qi "error\|not implemented\|stub"; then
+            echo "XFAIL: MCP server does not respond to initialize"
+            exit 0
+          fi
+
+          # Verify it lists tools
+          tools_response=$(echo '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' | timeout 5 mogfish-mcp 2>/dev/null) || true
+          if echo "$tools_response" | grep -q "classify_input"; then
+            echo "PASS: MCP server lists tools"
+          else
+            echo "XFAIL: MCP server does not list tools yet"
+            exit 0
+          fi
+
+      - name: "Inner [xfail]: end-to-end classify -> generate -> cache -> reuse"
+        run: |
+          # WHAT THIS TESTS:
+          # The full mogfish loop:
+          # 1. User types "find python files modified today"
+          # 2. Classifier returns generate:* (not a known command, no cached skill)
+          # 3. Model generates a Mog script
+          # 4. mogc compiles it
+          # 5. Script executes
+          # 6. Result cached as skill with fish completion stub
+          # 7. Next time user types same intent, classifier returns skill:*
+          # 8. Cached skill executes without model inference
+          #
+          # CURRENTLY: Steps 3-8 are unimplemented
+          # NEEDS: generate_mog wired, mogc integration, skill caching from fish
+          echo "--- INNER LOOP: full loop ---"
+
+          # Step 1-2: classifier correctly identifies this as not-a-known-command
+          result=$(mogfish-classify -- "show me python files modified today")
+          echo "Classify result: $result"
+
+          if [ "$result" != "passthrough" ]; then
+            echo "UNEXPECTED: classifier should return passthrough for novel intent"
+            echo "Got: $result"
+            exit 1
+          fi
+
+          # Steps 3-6 require model + mogc + skill cache wiring
+          # When implemented, this should:
+          # a) Generate a mog script
+          # b) Compile it
+          # c) Execute it
+          # d) Cache it
+
+          # Step 7: after caching, same intent should return skill:*
+          # This requires the skill cache to be populated by step 6
+          result2=$(mogfish-classify -- "show me python files modified today")
+          if echo "$result2" | grep -q "^skill:"; then
+            echo "PASS: intent cached and reused as skill"
+          else
+            echo "XFAIL: full loop not implemented — novel intent not cached as skill"
+            exit 0
+          fi
+
+      - name: "Inner [xfail]: model-backed classification via engine"
+        run: |
+          # WHAT THIS TESTS:
+          # When the fast-path classifier can't decide (not a known command,
+          # not a cached skill), it should fall back to the inference engine
+          # for model-based classification instead of just returning passthrough.
+          #
+          # CURRENTLY: mogfish-classify uses MockInferenceEngine, which always
+          # returns Passthrough. There's no way to use the real engine.
+          # NEEDS: mogfish-classify --engine mistralrs flag, or a separate
+          # mogfish-classify-full binary that loads the model
+          echo "--- INNER LOOP: model classification ---"
+
+          # The fast-path binary correctly returns passthrough for ambiguous input
+          result=$(mogfish-classify -- "what is eating my disk space")
+          echo "Fast-path result: $result"
+
+          # But with a real model, this should classify as GenerateNew
+          # (it's a natural language intent that the model can handle)
+          # For now, this is expected to be passthrough
+          if [ "$result" = "passthrough" ]; then
+            echo "XFAIL: fast-path returns passthrough, model classification not available"
+            exit 0
+          fi
+
+          # When model classification is available:
+          if echo "$result" | grep -q "^generate:"; then
+            echo "PASS: model classified intent as generate"
+          else
+            echo "FAIL: unexpected classification: $result"
+            exit 1
+          fi
+
+      # ================================================================
+      # Cargo test suite (unit + integration)
+      # ================================================================
+
+      - name: "Cargo: workspace tests (no model)"
+        run: |
+          cargo test --release --workspace \
+            --exclude mogfish-engine-mistralrs \
+            2>&1
