@@ -216,9 +216,13 @@ impl MistralRsEngine {
             .add_message(TextMessageRole::User, user_message)
             .into();
 
+        let dry = DrySamplingParams::new_with_defaults(0.8, None, None, None)
+            .map_err(|e| anyhow::anyhow!("DRY params: {e}"))?;
+
         let request = messages
             .set_sampler_temperature(0.1)
-            .set_sampler_max_len(1024);
+            .set_sampler_max_len(512)
+            .set_sampler_dry_params(dry);
 
         let response = self
             .model
@@ -303,20 +307,16 @@ impl InferenceEngine for MistralRsEngine {
     }
 
     fn generate_mog(&self, intent: &str, context: &GroundingContext) -> anyhow::Result<String> {
-        let commands_list = context.available_commands.join(", ");
-        let cwd = context
-            .working_directory
-            .as_ref()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|| ".".to_string());
+        // Match the training data format: instruction/input pairs for Mog generation
+        let system = "Generate a Mog script for this task";
 
-        let system = "You are a shell script generator. Given a user intent and available commands, \
-            generate a shell script that accomplishes the intent. \
-            Respond with ONLY the script, no explanation or markdown fences.";
-
-        let user_msg = format!(
-            "Intent: {intent}\nAvailable commands: {commands_list}\nWorking directory: {cwd}"
-        );
+        let mut user_msg = intent.to_string();
+        if !context.available_commands.is_empty() {
+            user_msg.push_str(&format!(
+                "\nAvailable commands: {}",
+                context.available_commands.join(", ")
+            ));
+        }
 
         self.chat_free(system, &user_msg)
     }

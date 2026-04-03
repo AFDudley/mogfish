@@ -87,10 +87,10 @@ fn classify_returns_valid_classification() {
 
 #[test]
 #[ignore]
-fn generate_mog_returns_nonempty_script() {
+fn generate_mog_returns_valid_mog_script() {
     let engine = get_engine();
     let ctx = GroundingContext {
-        available_commands: vec!["git".to_string(), "ls".to_string()],
+        available_commands: vec!["git".to_string(), "ls".to_string(), "find".to_string()],
         working_directory: None,
     };
     let script = engine
@@ -98,6 +98,18 @@ fn generate_mog_returns_nonempty_script() {
         .expect("generate_mog failed");
 
     assert!(!script.is_empty(), "mog script must not be empty");
+
+    // Must be a Mog script, not annotation JSON
+    assert!(
+        !script.trim_start().starts_with('{'),
+        "output is JSON, not a Mog script: {script}"
+    );
+
+    // Mog scripts declare dependencies with `requires` and have a main function
+    assert!(
+        script.contains("requires") || script.contains("fn main"),
+        "output does not look like a Mog script (missing requires/fn main): {script}"
+    );
 }
 
 #[test]

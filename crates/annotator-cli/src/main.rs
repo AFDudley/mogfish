@@ -46,6 +46,21 @@ enum Commands {
         #[arg(long, default_value = "mock")]
         engine: String,
     },
+
+    /// Generate a Mog script from natural language intent
+    Generate {
+        /// Natural language description of what to do
+        #[arg(long)]
+        intent: String,
+
+        /// Inference engine to use
+        #[arg(long, default_value = "mistralrs")]
+        engine: String,
+
+        /// Comma-separated list of available commands for grounding
+        #[arg(long, default_value = "")]
+        available_commands: String,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -87,6 +102,25 @@ fn main() -> anyhow::Result<()> {
         Commands::Daemon { dir, engine } => {
             let engine = make_engine(&engine)?;
             run_daemon(&dir, engine.as_ref())?;
+        }
+
+        Commands::Generate {
+            intent,
+            engine,
+            available_commands,
+        } => {
+            let engine = make_engine(&engine)?;
+            let cmds: Vec<String> = available_commands
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            let ctx = mogfish_traits::GroundingContext {
+                available_commands: cmds,
+                working_directory: None,
+            };
+            let script = engine.generate_mog(&intent, &ctx)?;
+            print!("{script}");
         }
     }
 
