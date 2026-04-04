@@ -19,6 +19,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  MOG_RUNTIME_DIR: /usr/lib/mog
 
 jobs:
   acceptance:
@@ -29,7 +30,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y fish
+          sudo apt-get install -y fish jq
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -37,10 +38,18 @@ jobs:
       - name: Build release binaries
         run: cargo build --release -p mogfish-annotator-cli -p mogfish-classify
 
+      - name: Build Mog compiler and runtime
+        run: |
+          cargo build --release --manifest-path mog/runtime-rs/Cargo.toml
+          cargo build --release --manifest-path mog/compiler/Cargo.toml
+
       - name: Install binaries to /usr/bin
         run: |
           sudo cp target/release/mogfish-annotate /usr/bin/
           sudo cp target/release/mogfish-classify /usr/bin/
+          sudo cp mog/compiler/target/release/mogc /usr/bin/
+          sudo mkdir -p /usr/lib/mog
+          sudo cp mog/runtime-rs/target/release/libmog_runtime.a /usr/lib/mog/
 
       - name: Install fish integration files
         run: |
@@ -97,14 +106,15 @@ jobs:
 
       # --- Fish integration ---
 
-      - name: "Outer: fish loads mogfish on startup"
+      - name: "Outer: fish loads mogfish in interactive sessions"
         run: |
           set -e
-          # fish auto-sources vendor_conf.d on startup
-          output=$(fish -c "echo ready" 2>&1)
+          # mogfish only activates in interactive sessions (conf.d guard).
+          # fish -ic forces interactive mode for this test.
+          output=$(fish -ic "echo ready" 2>&1)
           echo "$output"
           echo "$output" | grep -q "mogfish: enabled"
-          echo "PASS: mogfish loads in fish"
+          echo "PASS: mogfish loads in interactive fish"
 
       - name: "Outer: mogfish functions are available in fish"
         run: |
@@ -199,28 +209,34 @@ jobs:
           fi
           echo "PASS: generate path produced output"
 
-      - name: "Inner [xfail]: skill execution runs cached mog script"
+      - name: "Outer: skill execution runs cached mog script"
         run: |
-          # WHAT THIS TESTS:
-          # A skill was previously cached -> classifier returns skill:* ->
-          # __mogfish_run_skill retrieves and executes the cached Mog script
-          #
-          # CURRENTLY: __mogfish_run_skill is a stub
-          # NEEDS: mog runtime integration, skill-cache retrieval in fish
-          echo "--- INNER LOOP: skill execution ---"
+          set -e
+          # Create a real skill cache with a trivial Mog program
+          TEST_DIR=$(mktemp -d)
+          SKILL_DIR="$TEST_DIR/skills"
+          mkdir -p "$SKILL_DIR"
+          cat > "$SKILL_DIR/test-skill.json" << 'SKILLJSON'
+          {
+            "intent": "test skill",
+            "mog_script": "fn main() { print_string(\"skill-executed-ok\"); println(); }",
+            "dependencies": [],
+            "stale": false
+          }
+          SKILLJSON
 
-          # First, store a skill via the MCP lib (or mogfish-classify cache)
-          # Then try to run it
-          result=$(fish -c "
-            __mogfish_run_skill 'find big files'
-          " 2>&1)
+          # Execute the skill — must compile and run the Mog program
+          result=$(MOGFISH_DATA_DIR="$TEST_DIR" fish -c '__mogfish_run_skill "test skill"' 2>&1)
           echo "Got: $result"
+          echo "$result" | grep -q "skill-executed-ok"
 
-          if echo "$result" | grep -q "not yet implemented"; then
-            echo "XFAIL: skill execution is still a stub"
-            exit 0
-          fi
+          # Verify compiled binary was cached
+          test -f "$TEST_DIR/compiled/test-skill"
 
+          # Verify missing skill fails fast
+          MOGFISH_DATA_DIR="$TEST_DIR" fish -c '__mogfish_run_skill "nonexistent"' 2>/dev/null && exit 1 || true
+
+          rm -rf "$TEST_DIR"
           echo "PASS: skill execution works"
 
       - name: "Inner [xfail]: MCP server starts and responds to tool list"
