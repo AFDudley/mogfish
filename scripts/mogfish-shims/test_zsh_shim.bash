@@ -131,6 +131,61 @@ else
     fail "$name — got: $out"
 fi
 
+# =====================================================================
+# Regression tests from ingest session 34fcb210 (prior mogfish session)
+# These are real commands that failed with "zsh: bad option string"
+# =====================================================================
+
+# --- Test R1: python3 -c with single-quoted path (session 34fcb210) ---
+# Original: python3 -c "... open('"'"'/path/to/file'"'"') ..."
+name="regression: python3 -c with single-quoted path"
+tmpfile="/tmp/mogfish-test-r1.txt"
+echo "test-content" > "$tmpfile"
+out=$("$SHIM" -c -l "setopt NO_EXTENDED_GLOB 2>/dev/null || true && eval 'python3 -c \"print(open('\"'\"'$tmpfile'\"'\"').read().strip())\"' && pwd -P >| $CWD_FILE" 2>&1) || true
+rm -f "$tmpfile"
+if echo "$out" | grep -q "test-content"; then
+    pass "$name"
+else
+    fail "$name — got: $out"
+fi
+
+# --- Test R2: cat heredoc with escaped delimiter (session 34fcb210) ---
+# Original: cat >> file << '"'"'PEBBLE'"'"'
+name="regression: cat heredoc with escaped delimiter"
+tmpfile="/tmp/mogfish-test-r2.txt"
+rm -f "$tmpfile"
+out=$("$SHIM" -c -l "setopt NO_EXTENDED_GLOB 2>/dev/null || true && eval 'cat > $tmpfile << '\"'\"'MARKER'\"'\"'
+hello from heredoc
+MARKER' && pwd -P >| $CWD_FILE" 2>&1) || true
+if [ -f "$tmpfile" ] && grep -q "hello from heredoc" "$tmpfile"; then
+    pass "$name"
+else
+    fail "$name — got: $out (file: $(cat "$tmpfile" 2>/dev/null || echo 'missing'))"
+fi
+rm -f "$tmpfile"
+
+# --- Test R3: git commit with multiline -m containing parens (session 34fcb210) ---
+# Original: git commit -m "Fix mogfish-classify arg parsing...\n\nThe fish functions call..."
+name="regression: git commit -m with parens and newlines"
+out=$(run_without_devnull 'echo "Fix mogfish-classify arg parsing: handle -- separator
+
+The fish functions call mogfish-classify -- \$cmd but the binary only read
+args().nth(1), which returned just the first word."' 2>&1) || true
+if echo "$out" | grep -q "args().nth(1)"; then
+    pass "$name"
+else
+    fail "$name — got: $out"
+fi
+
+# --- Test R4: compound git add && git commit (session 34fcb210) ---
+name="regression: git add && git commit compound command"
+out=$(run_without_devnull 'echo "staged" && echo "committed with Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>"' 2>&1) || true
+if echo "$out" | grep -q "staged" && echo "$out" | grep -q "Co-Authored-By"; then
+    pass "$name"
+else
+    fail "$name — got: $out"
+fi
+
 # --- Summary ---
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
