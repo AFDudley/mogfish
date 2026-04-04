@@ -4,7 +4,7 @@
 # Only activates if mogfish-classify is on PATH.
 # See docs/plans/mogfish-outside-in-tdd.md, Layer 6
 
-if command -q mogfish-classify
+if status is-interactive; and command -q mogfish-classify
     mogfish-enable
 
     # Alias bash to mogfish-bass so that tools (like Claude Code) that
