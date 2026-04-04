@@ -12,11 +12,23 @@ if [ "$1" != "-c" ]; then
 fi
 
 shift
+
+# Claude Code passes: -c -l "setopt ... && eval 'CMD' ..."
+# After shifting -c above, strip the -l flag if present.
+if [ "$1" = "-l" ]; then
+    shift
+fi
+
 full_cmd="$*"
 
-# Extract the eval'd command: everything between eval ' and ' < /dev/null
-# Claude Code wraps with: eval 'ACTUAL_CMD' < /dev/null && pwd -P >| /tmp/claude-*-cwd
+# Extract the eval'd command from Claude Code's wrapper.
+# Two patterns observed:
+#   eval 'CMD' < /dev/null && pwd -P >| /tmp/claude-*-cwd
+#   eval 'CMD' && pwd -P >| /tmp/claude-*-cwd
 actual_cmd=$(echo "$full_cmd" | sed -n "s/.*eval '\\(.*\\)' < \\/dev\\/null.*/\\1/p")
+if [ -z "$actual_cmd" ]; then
+    actual_cmd=$(echo "$full_cmd" | sed -n "s/.*eval '\\(.*\\)' && pwd.*/\\1/p")
+fi
 
 if [ -z "$actual_cmd" ]; then
     # Not a Claude Code command pattern — pass through to real zsh
@@ -26,8 +38,20 @@ fi
 # Extract the cwd output file path
 cwd_file=$(echo "$full_cmd" | grep -oP '/tmp/claude-[a-z0-9]+-cwd')
 
-# Run the actual command in fish (where mogfish-bass is active)
-fish -c "$actual_cmd"
+# Un-escape the bash single-quote idiom. Claude Code wraps the command
+# in eval '...', which requires escaping embedded ' as '"'"'. The sed
+# extraction preserves these escapes, but since we're re-executing the
+# command (not feeding it back into eval), we need plain quotes.
+old="'\"'\"'"
+new="'"
+actual_cmd="${actual_cmd//$old/$new}"
+
+# Pass the command via environment variable to avoid quoting issues.
+# The command is bash syntax — fish can't run it directly (parens,
+# $(), heredocs all differ). Route through mogfish-bass which
+# classifies and executes via bass (real bash) when needed.
+export __MOGFISH_SHIM_CMD="$actual_cmd"
+fish -c 'mogfish-bass -c "$__MOGFISH_SHIM_CMD"'
 exit_code=$?
 
 # Write cwd for Claude Code to track directory changes

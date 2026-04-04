@@ -25,9 +25,11 @@ function mogfish-bass
 
         switch $result
             case 'known:*'
-                # Known command — safe to run directly in fish.
-                # Strip the "known:" prefix to verify, then eval in fish.
-                eval $joined_cmd
+                # Known command — no skill generation needed.
+                # Run through bass (real bash) since the command is bash
+                # syntax and may use features fish can't parse: (), $(),
+                # heredocs, brace expansion, etc.
+                bass $joined_cmd
                 return $status
 
             case 'skill:*'
